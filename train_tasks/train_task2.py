@@ -17,7 +17,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 import wandb
 
-from models import VGG11, LocalizationModel, IoULoss
+from models import VGG11Encoder, LocalizationModel, IoULoss
 from data   import get_dataloaders
 from utils  import (Trainer, compute_iou_batch, compute_map,
                     init_wandb, log_images_bbox)

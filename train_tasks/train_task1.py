@@ -20,7 +20,7 @@ import wandb
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from models import VGG11, CustomDropout
+from models import VGG11Encoder, CustomDropout
 from data   import get_dataloaders
 from utils  import (Trainer, compute_f1_macro, init_wandb,
                     log_feature_maps, log_activation_hist)
@@ -61,7 +61,7 @@ def train_vgg11(args, use_bn: bool = True, dropout_p: float = 0.5,
         batch_size=args.batch_size, num_workers=args.num_workers
     )
 
-    model = VGG11(num_classes=37, dropout_p=dropout_p)
+    model = VGG11Encoder(num_classes=37, dropout_p=dropout_p)
 
     if not use_bn:
         # Remove BatchNorm layers for ablation study

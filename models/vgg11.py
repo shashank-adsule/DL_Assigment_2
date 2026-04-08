@@ -1,32 +1,9 @@
-"""
-VGG11 backbone with BatchNorm and CustomDropout.
-
-Architectural decisions
------------------------
-BatchNorm placement  : after Conv2d, before ReLU.
-  Reason: normalising pre-activation values prevents the ReLU from receiving
-  inputs with arbitrarily large scale, which would cause dead neurons or
-  saturated activations and slow convergence.
-
-Dropout placement    : only in the fully-connected classifier head, NOT in
-  convolutional blocks.
-  Reason 1 – spatial correlation: adjacent pixels in a feature map are highly
-  correlated, so dropping individual values gives weak regularisation compared
-  to dropping in FC layers where each unit carries independent information.
-  Reason 2 – reuse: the convolutional backbone is reused as an encoder in
-  Tasks 2, 3, and 4. Keeping it dropout-free produces more stable feature
-  representations for downstream heads.
-
-Dropout after ReLU in FC layers: we mask neurons that are already active
-  (positive), which is a stronger signal than masking pre-activation values.
-"""
-
 import torch
 import torch.nn as nn
 from .layers import CustomDropout
 
 
-class VGG11(nn.Module):
+class VGG11Encoder(nn.Module):
     """
     VGG11 with BatchNorm, from scratch.
 

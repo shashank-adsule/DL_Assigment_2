@@ -33,7 +33,7 @@ which matches the normalised [cx, cy, w, h] coordinate space.
 
 import torch
 import torch.nn as nn
-from .vgg11 import VGG11
+from .vgg11 import VGG11Encoder
 
 
 class LocalizationModel(nn.Module):
