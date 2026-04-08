@@ -45,7 +45,7 @@ class LocalizationModel(nn.Module):
         freeze_backbone (bool): If True, backbone weights are frozen.
     """
 
-    def __init__(self, vgg11: VGG11, freeze_backbone: bool = True):
+    def __init__(self, vgg11: VGG11Encoder, freeze_backbone: bool = True):
         super().__init__()
 
         self.backbone = vgg11.get_backbone()          # nn.Sequential of conv blocks

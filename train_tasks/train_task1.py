@@ -21,7 +21,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from models import VGG11Encoder, CustomDropout
-from data   import get_dataloaders
+from data.dataset   import get_dataloaders
 from utils  import (Trainer, compute_f1_macro, init_wandb,
                     log_feature_maps, log_activation_hist)
 
