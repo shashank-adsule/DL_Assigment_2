@@ -49,4 +49,4 @@ class IoULoss(nn.Module):
             return loss
 
     def extra_repr(self) -> str:
-        return f"reduction='{self.reduction}', eps={self.eps}"  
+        return f"reduction='{self.reduction}', eps={self.eps}"

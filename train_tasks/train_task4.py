@@ -1,194 +1,189 @@
 """
-train_task4.py  —  Unified Multi-Task Pipeline (Task 4)
-
-Loads the best weights from Tasks 1–3 into corresponding parts of the
-MultiTaskVGG11 model, then trains end-to-end with the combined loss.
+train_task4.py — Unified Multi-Task Pipeline (Task 4)
 
 Usage:
-    python train_task4.py --data_root /path/to/oxford_pets \
-                          --vgg11_ckpt  outputs/vgg11_bn1_dp0.5_best.pt \
-                          --unet_ckpt   outputs/task3_unet_full_best.pt \
-                          --epochs 30
+    python train_tasks/train_task4.py \
+        --data_root /path/to/oxford_pets \
+        --epochs 30 --batch_size 16
 """
 
 import argparse
-import os, sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from pathlib import Path
+
+import numpy as np
 import torch
-from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torch.nn as nn
+from torch.utils.data import DataLoader
 import wandb
+from sklearn.metrics import f1_score
 
-from models import MultiTaskVGG11, MultiTaskLoss
-from data   import get_dataloaders
-from utils  import (Trainer, compute_f1_macro, compute_dice,
-                    compute_pixel_acc, compute_map, compute_iou_batch,
-                    init_wandb, log_seg_samples)
+from models.multitask    import MultiTaskPerceptionModel
+from models.segmentation import DiceCELoss
+from losses.iou_loss     import IoULoss
+from data.dataset        import OxfordPetDataset, collate_fn
 
-
-# ---------------------------------------------------------------------------
-# Loss / metric wrappers for multi-task batch
-# ---------------------------------------------------------------------------
-_mt_loss = None   # initialised in main after args are parsed
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def mt_loss_fn(outputs, batch):
-    """
-    outputs = dict with keys 'classification', 'localization', 'segmentation'
-    batch   = (images, labels, bboxes, masks)
-    """
-    cls_logits = outputs['classification']
-    bbox_pred  = outputs['localization']
-    seg_logits = outputs['segmentation']
-    _, labels, bboxes, masks = batch
-    device = cls_logits.device
-
-    loss, extra = _mt_loss(
-        cls_logits, bbox_pred, seg_logits,
-        labels.to(device), bboxes.to(device), masks.to(device)
-    )
-    return loss, extra
+def xyxy_to_cxcywh(boxes):
+    x1, y1, x2, y2 = boxes.unbind(1)
+    return torch.stack([(x1+x2)*0.5,(y1+y2)*0.5,(x2-x1).clamp(0),(y2-y1).clamp(0)],1)
 
 
-def mt_metric_fn(all_outputs, all_batches):
-    all_cls   = torch.cat([o['classification'] for o in all_outputs])
-    all_bbox  = torch.cat([o['localization']   for o in all_outputs])
-    all_seg   = torch.cat([o['segmentation']   for o in all_outputs])
-
-    all_labels = torch.cat([b[1] for b in all_batches])
-    all_gts    = torch.cat([b[2] for b in all_batches])
-    all_masks  = torch.cat([b[3] for b in all_batches])
-
-    preds_cls = all_cls.argmax(dim=1).numpy()
-    f1  = compute_f1_macro(preds_cls.tolist(), all_labels.numpy().tolist())
-    mAP = compute_map([all_bbox], [all_gts])
-    dice = compute_dice(all_seg, all_masks, num_classes=3)
-    pxacc = compute_pixel_acc(all_seg, all_masks)
-
-    return {
-        "val/f1_macro":  f1,
-        "val/mAP":       mAP,
-        "val/dice":      dice,
-        "val/pixel_acc": pxacc,
-    }
+def iou_per_sample(pred, gt, eps=1e-6):
+    def corners(b):
+        cx,cy,w,h = b.unbind(1); return cx-w/2,cy-h/2,cx+w/2,cy+h/2
+    px1,py1,px2,py2 = corners(pred); gx1,gy1,gx2,gy2 = corners(gt)
+    iw=(torch.min(px2,gx2)-torch.max(px1,gx1)).clamp(0)
+    ih=(torch.min(py2,gy2)-torch.max(py1,gy1)).clamp(0)
+    inter=iw*ih; ap=(px2-px1).clamp(0)*(py2-py1).clamp(0)
+    ag=(gx2-gx1).clamp(0)*(gy2-gy1).clamp(0)
+    return inter/(ap+ag-inter+eps)
 
 
-# ---------------------------------------------------------------------------
-# Weight initialisation from single-task checkpoints
-# ---------------------------------------------------------------------------
-def load_pretrained_weights(model: MultiTaskVGG11, vgg11_ckpt: str, unet_ckpt: str = None):
-    """
-    Load encoder weights from VGG11 Task-1 checkpoint.
-    Optionally load seg decoder from UNet Task-3 checkpoint.
-    """
-    # ---- Encoder from VGG11 ----
-    vgg_sd = torch.load(vgg11_ckpt, map_location="cpu")["model"]
-    ranges = [(0, 3, "enc1"), (4, 7, "enc2"), (8, 14, "enc3"),
-              (15, 21, "enc4"), (22, 28, "enc5")]
-
-    for start, end, attr in ranges:
-        block = getattr(model, attr)
-        sub_sd = {}
-        for k, v in vgg_sd.items():
-            if not k.startswith("features."):
-                continue
-            idx = int(k.split(".")[1])
-            if start <= idx < end:
-                sub_key = ".".join(k.split(".")[2:])
-                sub_sd[f"{idx - start}.{sub_key}"] = v
-        block.load_state_dict(sub_sd, strict=False)
-
-    # ---- Classifier head from VGG11 ----
-    cls_sd = {k.replace("classifier.", ""): v
-              for k, v in vgg_sd.items() if k.startswith("classifier.")}
-    model.cls_head.load_state_dict(cls_sd, strict=False)
-
-    print(f"  Loaded encoder + cls head from {vgg11_ckpt}")
-
-    # ---- Seg decoder from UNet (optional) ----
-    if unet_ckpt and os.path.exists(unet_ckpt):
-        unet_sd = torch.load(unet_ckpt, map_location="cpu")["model"]
-        decoder_keys = ["bottleneck", "up5", "dec5", "up4", "dec4",
-                        "up3", "dec3", "up2", "dec2", "up1", "dec1", "seg_out"]
-        dec_sd = {k: v for k, v in unet_sd.items()
-                  if any(k.startswith(dk) for dk in decoder_keys)}
-        missing, unexpected = model.load_state_dict(dec_sd, strict=False)
-        print(f"  Loaded seg decoder from {unet_ckpt} "
-              f"(missing={len(missing)}, unexpected={len(unexpected)})")
+def save_checkpoint(model, tag, ckpt_dir, epoch, metric):
+    Path(ckpt_dir).mkdir(parents=True, exist_ok=True)
+    path = os.path.join(ckpt_dir, f"{tag}.pth")
+    torch.save({"state_dict": model.state_dict(), "epoch": epoch, "metric": metric}, path)
+    return path
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 def main():
-    global _mt_loss
+    p = argparse.ArgumentParser()
+    p.add_argument("--data_root",     required=True)
+    p.add_argument("--cls_ckpt",      default="checkpoints/classifier.pth")
+    p.add_argument("--loc_ckpt",      default="checkpoints/localizer.pth")
+    p.add_argument("--seg_ckpt",      default="checkpoints/unet.pth")
+    p.add_argument("--lambda_cls",    type=float, default=1.0)
+    p.add_argument("--lambda_loc",    type=float, default=1.0)
+    p.add_argument("--lambda_seg",    type=float, default=1.0)
+    p.add_argument("--epochs",        type=int,   default=30)
+    p.add_argument("--batch_size",    type=int,   default=16)
+    p.add_argument("--lr",            type=float, default=5e-5)
+    p.add_argument("--num_workers",   type=int,   default=4)
+    p.add_argument("--save_dir",      default="checkpoints")
+    p.add_argument("--wandb_project", default="da6401_a2")
+    args = p.parse_args()
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root",     required=True)
-    parser.add_argument("--vgg11_ckpt",    required=True)
-    parser.add_argument("--unet_ckpt",     default=None)
-    parser.add_argument("--epochs",        type=int,   default=30)
-    parser.add_argument("--batch_size",    type=int,   default=16)
-    parser.add_argument("--lr",            type=float, default=5e-5)
-    parser.add_argument("--lambda_cls",    type=float, default=1.0)
-    parser.add_argument("--lambda_loc",    type=float, default=1.0)
-    parser.add_argument("--lambda_seg",    type=float, default=1.0)
-    parser.add_argument("--num_workers",   type=int,   default=4)
-    parser.add_argument("--save_dir",      default="outputs")
-    parser.add_argument("--wandb_project", default="da6401_a2")
-    args = parser.parse_args()
+    wandb.init(project=args.wandb_project, name="multitask", config=vars(args))
+    print(f"Device: {DEVICE}")
 
-    os.makedirs(args.save_dir, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    model = MultiTaskPerceptionModel(
+        cls_ckpt=args.cls_ckpt,
+        loc_ckpt=args.loc_ckpt,
+        seg_ckpt=args.seg_ckpt,
+    ).to(DEVICE)
 
-    init_wandb(project=args.wandb_project, run_name="task4_multitask",
-               config=vars(args))
+    tr_ds = OxfordPetDataset(args.data_root, partition="train", mode="all")
+    va_ds = OxfordPetDataset(args.data_root, partition="val",   mode="all")
+    kw    = dict(batch_size=args.batch_size, num_workers=args.num_workers,
+                 pin_memory=True, collate_fn=collate_fn)
+    tr_dl = DataLoader(tr_ds, shuffle=True,  **kw)
+    va_dl = DataLoader(va_ds, shuffle=False, **kw)
 
-    model = MultiTaskVGG11(num_classes=37, num_seg_classes=3)
-    load_pretrained_weights(model, args.vgg11_ckpt, args.unet_ckpt)
+    ce_fn   = nn.CrossEntropyLoss(label_smoothing=0.1)
+    iou_fn  = IoULoss(reduction="mean")
+    dice_fn = DiceCELoss(num_classes=3, ignore_index=-1)
+    mse_fn  = nn.MSELoss()
 
-    _mt_loss = MultiTaskLoss(
-        num_seg_classes=3,
-        lambda_cls=args.lambda_cls,
-        lambda_loc=args.lambda_loc,
-        lambda_seg=args.lambda_seg,
-    )
+    optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=args.epochs)
 
-    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
-    scheduler = ReduceLROnPlateau(optimizer, patience=4, factor=0.5, verbose=True)
+    IMG_SZ  = 224.0
+    best_f1 = 0.0
 
-    train_loader, val_loader, test_loader = get_dataloaders(
-        root=args.data_root, task="multitask",
-        batch_size=args.batch_size, num_workers=args.num_workers
-    )
+    for epoch in range(1, args.epochs + 1):
+        model.train()
+        tr_loss = tr_n = 0
+        for batch in tr_dl:
+            imgs      = batch["image"].to(DEVICE)
+            labels    = batch["label"].to(DEVICE)
+            bbox_xyxy = batch["bbox"].to(DEVICE)
+            masks     = batch["mask"].to(DEVICE)
+            valid_box = batch["bbox_mask"].to(DEVICE).bool()
 
-    trainer = Trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        optimizer=optimizer,
-        loss_fn=mt_loss_fn,
-        metric_fn=mt_metric_fn,
-        scheduler=scheduler,
-        device=device,
-        save_dir=args.save_dir,
-        run_name="task4_multitask",
-    )
-    trainer.fit(args.epochs)
+            optimiser.zero_grad()
+            out   = model(imgs)
+            cls_l = ce_fn(out["classification"], labels)
 
-    # Final showcase: log seg samples
-    model.eval()
-    batch = next(iter(test_loader))
-    images = batch[0].to(device)
-    with torch.no_grad():
-        out = model(images)
-    log_seg_samples(images.cpu(), batch[3], out['segmentation'].cpu(), n=5,
-                    step=args.epochs)
+            bbox_cx = xyxy_to_cxcywh(bbox_xyxy)
+            if valid_box.sum() > 0:
+                p_n   = out["localization"][valid_box] / IMG_SZ
+                t_n   = bbox_cx[valid_box] / IMG_SZ
+                loc_l = 0.7 * mse_fn(p_n, t_n) + iou_fn(p_n, t_n)
+            else:
+                loc_l = torch.tensor(0.0, device=DEVICE)
+
+            seg_l = dice_fn(out["segmentation"], masks)
+            loss  = (args.lambda_cls * cls_l +
+                     args.lambda_loc * loc_l +
+                     args.lambda_seg * seg_l)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimiser.step()
+            tr_loss += loss.item() * imgs.size(0)
+            tr_n    += imgs.size(0)
+
+        scheduler.step()
+        tr_loss /= max(tr_n, 1)
+
+        model.eval()
+        va_cls_t, va_cls_p = [], []
+        va_iou_vals = []
+        dice_acc    = np.zeros(3)
+        va_n        = 0
+
+        with torch.no_grad():
+            for batch in va_dl:
+                imgs      = batch["image"].to(DEVICE)
+                labels    = batch["label"].to(DEVICE)
+                bbox_xyxy = batch["bbox"].to(DEVICE)
+                masks     = batch["mask"].to(DEVICE)
+                valid_box = batch["bbox_mask"].to(DEVICE).bool()
+                n         = imgs.size(0)
+                out       = model(imgs)
+
+                va_cls_t.extend(labels.cpu().tolist())
+                va_cls_p.extend(out["classification"].argmax(1).cpu().tolist())
+
+                if valid_box.sum() > 0:
+                    bbox_cx = xyxy_to_cxcywh(bbox_xyxy)
+                    ious = iou_per_sample(
+                        out["localization"][valid_box].clamp(0, IMG_SZ),
+                        bbox_cx[valid_box])
+                    va_iou_vals.extend(ious.cpu().tolist())
+
+                preds = out["segmentation"].argmax(1)
+                valid = masks >= 0
+                for c in range(3):
+                    tp = ((preds==c)&(masks==c)&valid).sum().item()
+                    fp = ((preds==c)&(masks!=c)&valid).sum().item()
+                    fn = ((preds!=c)&(masks==c)&valid).sum().item()
+                    d  = 2*tp+fp+fn
+                    dice_acc[c] += (2*tp/d if d>0 else 0.0) * n
+                va_n += n
+
+        macro_f1   = f1_score(va_cls_t, va_cls_p, average="macro", zero_division=0)
+        mean_iou   = float(np.mean(va_iou_vals)) if va_iou_vals else 0.0
+        macro_dice = float((dice_acc / max(va_n, 1)).mean())
+
+        wandb.log({"epoch": epoch, "lr": scheduler.get_last_lr()[0],
+                   "train/loss": tr_loss, "val/macro_f1": macro_f1,
+                   "val/mean_iou": mean_iou, "val/macro_dice": macro_dice})
+
+        print(f"  Ep {epoch:03d}  tr={tr_loss:.4f}  "
+              f"f1={macro_f1:.4f}  iou={mean_iou:.4f}  dice={macro_dice:.4f}")
+
+        if macro_f1 > best_f1:
+            best_f1 = macro_f1
+            save_checkpoint(model, "multitask", args.save_dir, epoch, best_f1)
 
     wandb.finish()
-
+    print(f"Best val macro-F1: {best_f1:.4f}")
 
 if __name__ == "__main__":
     main()

@@ -1,192 +1,173 @@
+"""
+models/multitask.py
+--------------------
+Unified multi-task model (Task 4).
+
+Why three separate encoders?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Each task head was trained against features from its OWN dedicated
+VGG-11 backbone. Using a single shared encoder at inference time
+causes the heads whose encoder is replaced to receive a completely
+different feature distribution from training, collapsing their metrics.
+
+Three independent encoders — each loaded from its own checkpoint —
+ensures every head always sees the feature statistics it was optimised
+on, while a single forward() satisfies the assignment API.
+
+Autograder import:
+    from models.multitask import MultiTaskPerceptionModel
+"""
+
+import os
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from .layers    import CustomDropout, IoULoss
-from .segmentation import DoubleConv, DiceCELoss
+from .vgg11          import VGG11Encoder
+from .classification import FCHead
+from .localization   import BBoxHead
+from .segmentation   import UpBlock, DiceCELoss
+from .layers         import CustomDropout
+
+_CKPT_DIR = "checkpoints"
 
 
-class MultiTaskVGG11(nn.Module):
+def _read_ckpt(path: str) -> dict:
+    raw = torch.load(path, map_location="cpu")
+    return raw.get("state_dict", raw)
+
+
+def _strip_prefix(sd: dict, prefix: str) -> dict:
+    return {k[len(prefix):]: v for k, v in sd.items() if k.startswith(prefix)}
+
+
+class MultiTaskPerceptionModel(nn.Module):
+    """
+    Single forward-pass model returning classification, localisation,
+    and segmentation outputs simultaneously.
+    """
 
     def __init__(
         self,
-        num_classes: int = 37,
-        num_seg_classes: int = 3,
-        dropout_p: float = 0.5,
+        num_breeds:  int = 37,
+        seg_classes: int = 3,
+        in_channels: int = 3,
+        cls_ckpt: str = os.path.join(_CKPT_DIR, "classifier.pth"),
+        loc_ckpt: str = os.path.join(_CKPT_DIR, "localizer.pth"),
+        seg_ckpt: str = os.path.join(_CKPT_DIR, "unet.pth"),
     ):
+        try:
+            import gdown
+            gdown.download(id="1Us7ddjdy_r8ZSNpz9ON1d7woc9hn9hr5",
+                           output=cls_ckpt, quiet=False)
+            gdown.download(id="16sLO2Stq9rkLTp0m6tH3cf26-kSnT4ig",
+                           output=loc_ckpt, quiet=False)
+            gdown.download(id="1nbuevJc7pYq4PfWgU1ymiiffyayn9Upr",
+                           output=seg_ckpt, quiet=False)
+        except Exception as e:
+            print(f"  [MultiTask] gdown warning: {e}")
+
         super().__init__()
 
-        # ============================================================
-        # Shared encoder — split into 5 addressable blocks so the
-        # segmentation decoder can access skip-connection feature maps.
-        # ============================================================
-        self.enc1 = nn.Sequential(
-            nn.Conv2d(3,   64,  3, padding=1), nn.BatchNorm2d(64),  nn.ReLU(inplace=True),
-        )
-        self.pool1 = nn.MaxPool2d(2, 2)
+        # ---- Three task-specific encoders ----
+        self.enc_cls = VGG11Encoder(in_channels=in_channels)
+        self.enc_loc = VGG11Encoder(in_channels=in_channels)
+        self.enc_seg = VGG11Encoder(in_channels=in_channels)
 
-        self.enc2 = nn.Sequential(
-            nn.Conv2d(64,  128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(inplace=True),
-        )
-        self.pool2 = nn.MaxPool2d(2, 2)
-
-        self.enc3 = nn.Sequential(
-            nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(inplace=True),
-        )
-        self.pool3 = nn.MaxPool2d(2, 2)
-
-        self.enc4 = nn.Sequential(
-            nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
-        )
-        self.pool4 = nn.MaxPool2d(2, 2)
-
-        self.enc5 = nn.Sequential(
-            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
-        )
-        self.pool5 = nn.MaxPool2d(2, 2)
-
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
-
-        # ============================================================
-        # Head 1: Classification
-        # ============================================================
-        self.cls_head = nn.Sequential(
-            nn.Linear(512 * 7 * 7, 4096),
-            nn.ReLU(inplace=True),
-            CustomDropout(p=dropout_p),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            CustomDropout(p=dropout_p),
-            nn.Linear(4096, num_classes),
-        )
-
-        # ============================================================
-        # Head 2: Localization (bounding-box regression)
-        # ============================================================
-        self.loc_head = nn.Sequential(
-            nn.Linear(512 * 7 * 7, 1024),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.3),
-            nn.Linear(1024, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 4),
-            nn.Sigmoid(),
-        )
-
-        # ============================================================
-        # Head 3: Segmentation decoder (U-Net style)
-        # ============================================================
-        self.bottleneck = DoubleConv(512, 512)
-
-        self.up5  = nn.ConvTranspose2d(512, 512, 2, stride=2)
-        self.dec5 = DoubleConv(512 + 512, 512)
-
-        self.up4  = nn.ConvTranspose2d(512, 256, 2, stride=2)
-        self.dec4 = DoubleConv(256 + 512, 256)
-
-        self.up3  = nn.ConvTranspose2d(256, 128, 2, stride=2)
-        self.dec3 = DoubleConv(128 + 256, 128)
-
-        self.up2  = nn.ConvTranspose2d(128, 64,  2, stride=2)
-        self.dec2 = DoubleConv(64  + 128, 64)
-
-        self.up1  = nn.ConvTranspose2d(64,  32,  2, stride=2)
-        self.dec1 = DoubleConv(32  + 64,  32)
-
-        self.seg_out = nn.Conv2d(32, num_seg_classes, kernel_size=1)
-
-        self._init_weights()
-
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.zeros_(m.bias)
-
-    def forward(self, x: torch.Tensor) -> dict:
-        # ---- Shared encoder ----
-        s1 = self.enc1(x)
-        s2 = self.enc2(self.pool1(s1))
-        s3 = self.enc3(self.pool2(s2))
-        s4 = self.enc4(self.pool3(s3))
-        s5 = self.enc5(self.pool4(s4))
-        pooled = self.pool5(s5)         # (B, 512, H/32, W/32)
-
-        # ---- Classification and localization use global-pooled features ----
-        global_feat = torch.flatten(self.avgpool(s5), 1)   # (B, 25088)
-
-        cls_logits = self.cls_head(global_feat)             # (B, num_classes)
-        bbox       = self.loc_head(global_feat)             # (B, 4)
+        # ---- Task heads ----
+        self.cls_head = FCHead(num_classes=num_breeds, drop_rate=0.5)
+        self.loc_head = BBoxHead(dropout_p=0.5)
 
         # ---- Segmentation decoder ----
-        d = self.bottleneck(pooled)
-        d = self.dec5(torch.cat([self.up5(d), s5], dim=1))
-        d = self.dec4(torch.cat([self.up4(d), s4], dim=1))
-        d = self.dec3(torch.cat([self.up3(d), s3], dim=1))
-        d = self.dec2(torch.cat([self.up2(d), s2], dim=1))
-        d = self.dec1(torch.cat([self.up1(d), s1], dim=1))
-        seg_logits = self.seg_out(d)                        # (B, num_seg_classes, H, W)
+        self.up5 = UpBlock(512, 512, 512)
+        self.up4 = UpBlock(512, 512, 256)
+        self.up3 = UpBlock(256, 256, 128)
+        self.up2 = UpBlock(128, 128,  64)
+        self.up1 = UpBlock( 64,  64,  32)
+        self.seg_drop = CustomDropout(p=0.5)
+        self.seg_proj = nn.Conv2d(32, seg_classes, kernel_size=1)
 
-        # Return as dict — autograder expects these exact keys
+        self._load_weights(cls_ckpt, loc_ckpt, seg_ckpt)
+
+    # ------------------------------------------------------------------
+    def _load_encoder(self, enc: nn.Module, sd: dict, tag: str) -> None:
+        enc_sd = _strip_prefix(sd, "encoder.")
+        if enc_sd:
+            miss, unexp = enc.load_state_dict(enc_sd, strict=False)
+            print(f"  [{tag}] encoder: missing={len(miss)} unexpected={len(unexp)}")
+        else:
+            print(f"  [{tag}] WARNING: no 'encoder.*' keys found.")
+
+    def _load_weights(self, cls_path, loc_path, seg_path) -> None:
+        # Classification
+        if os.path.isfile(cls_path):
+            sd = _read_ckpt(cls_path)
+            self._load_encoder(self.enc_cls, sd, "cls")
+            head_sd = _strip_prefix(sd, "head.")
+            if head_sd:
+                self.cls_head.load_state_dict(head_sd, strict=False)
+        else:
+            print(f"  WARNING: '{cls_path}' not found.")
+
+        # Localisation
+        if os.path.isfile(loc_path):
+            sd = _read_ckpt(loc_path)
+            self._load_encoder(self.enc_loc, sd, "loc")
+            head_sd = _strip_prefix(sd, "head.")
+            if head_sd:
+                self.loc_head.load_state_dict(head_sd, strict=False)
+        else:
+            print(f"  WARNING: '{loc_path}' not found.")
+
+        # Segmentation
+        if os.path.isfile(seg_path):
+            sd = _read_ckpt(seg_path)
+            self._load_encoder(self.enc_seg, sd, "seg")
+            for name in ["up5", "up4", "up3", "up2", "up1"]:
+                blk_sd = _strip_prefix(sd, f"{name}.")
+                if blk_sd:
+                    getattr(self, name).load_state_dict(blk_sd, strict=False)
+            proj_sd = _strip_prefix(sd, "output_conv.")
+            if proj_sd:
+                self.seg_proj.load_state_dict(proj_sd, strict=False)
+            print(f"  [seg] decoder loaded from '{seg_path}'.")
+        else:
+            print(f"  WARNING: '{seg_path}' not found.")
+
+    # ------------------------------------------------------------------
+    def forward(self, x: torch.Tensor) -> dict:
+        """
+        Single forward pass.
+
+        Returns:
+            {
+              'classification': [B, num_breeds]          class logits
+              'localization'  : [B, 4]                   (cx,cy,w,h) pixels
+              'segmentation'  : [B, seg_classes, H, W]
+            }
+        """
+        # Classification branch
+        cls_out = self.cls_head(self.enc_cls(x, return_features=False))
+
+        # Localisation branch
+        loc_out = self.loc_head(self.enc_loc(x, return_features=False))
+
+        # Segmentation branch
+        neck, skips = self.enc_seg(x, return_features=True)
+        d = self.up5(neck,  skips["b5"])
+        d = self.up4(d,     skips["b4"])
+        d = self.up3(d,     skips["b3"])
+        d = self.up2(d,     skips["b2"])
+        d = self.up1(d,     skips["b1"])
+        d = self.seg_drop(d)
+        seg_out = self.seg_proj(d)
+
         return {
-            'classification': cls_logits,
-            'localization':   bbox,
-            'segmentation':   seg_logits,
+            "classification": cls_out,
+            "localization":   loc_out,
+            "segmentation":   seg_out,
         }
 
 
-# ---------------------------------------------------------------------------
-# Multi-task loss
-# ---------------------------------------------------------------------------
-class MultiTaskLoss(nn.Module):
-
-    def __init__(
-        self,
-        num_seg_classes: int = 3,
-        lambda_cls: float = 1.0,
-        lambda_loc: float = 1.0,
-        lambda_seg: float = 1.0,
-    ):
-        super().__init__()
-        self.lambda_cls = lambda_cls
-        self.lambda_loc = lambda_loc
-        self.lambda_seg = lambda_seg
-
-        self.ce_loss    = nn.CrossEntropyLoss()
-        self.iou_loss   = IoULoss()
-        self.dicece     = DiceCELoss(num_classes=num_seg_classes)
-
-    def forward(
-        self,
-        cls_logits: torch.Tensor,
-        bbox_pred:  torch.Tensor,
-        seg_logits: torch.Tensor,
-        cls_target: torch.Tensor,
-        bbox_target:torch.Tensor,
-        seg_target: torch.Tensor,
-    ):
-        loss_cls = self.ce_loss(cls_logits, cls_target)
-        loss_loc = self.iou_loss(bbox_pred, bbox_target)
-        loss_seg = self.dicece(seg_logits, seg_target)
-
-        total = (
-            self.lambda_cls * loss_cls
-            + self.lambda_loc * loss_loc
-            + self.lambda_seg * loss_seg
-        )
-        return total, {"cls": loss_cls.item(), "loc": loss_loc.item(), "seg": loss_seg.item()}
-
-
-# Autograder imports this exact name:
-#   from models.multitask import MultiTaskPerceptionModel
-MultiTaskPerceptionModel = MultiTaskVGG11
+# ---- Keep your old class name as an alias ----
+MultiTaskVGG11 = MultiTaskPerceptionModel

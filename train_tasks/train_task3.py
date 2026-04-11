@@ -1,190 +1,190 @@
 """
-train_task3.py  —  U-Net Segmentation (Task 3)
+train_task3.py — U-Net Segmentation (Task 3)
 
-Runs three transfer-learning strategies for W&B report section 2.3:
-  1. frozen   — entire VGG11 encoder frozen
-  2. partial  — last 2 enc blocks unfrozen
-  3. full     — entire network fine-tuned
+Runs three encoder-freezing strategies for W&B report section 2.3.
 
 Usage:
-    python train_task3.py --data_root /path/to/oxford_pets \
-                          --vgg11_ckpt outputs/vgg11_bn1_dp0.5_best.pt \
-                          --strategy frozen  # or partial / full / all
+    python train_tasks/train_task3.py \
+        --data_root /path/to/oxford_pets \
+        --cls_ckpt  checkpoints/classifier.pth \
+        --strategy all \
+        --epochs 50 --batch_size 16
 """
 
 import argparse
-import os, sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from pathlib import Path
+
+import numpy as np
 import torch
-from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torch.nn as nn
+from torch.utils.data import DataLoader
 import wandb
+from sklearn.metrics import f1_score
 
-from models import UNetVGG11, DiceCELoss, VGG11Encoder
-from data   import get_dataloaders
-from utils  import (Trainer, compute_dice, compute_pixel_acc,
-                    init_wandb, log_seg_samples)
+from models.segmentation import UNetVGG11, DiceCELoss
+from data.dataset        import OxfordPetDataset, collate_fn
 
-
-# ---------------------------------------------------------------------------
-# Loss / metric wrappers
-# ---------------------------------------------------------------------------
-_dice_ce = DiceCELoss(num_classes=3)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def seg_loss_fn(outputs, batch):
-    logits = outputs
-    masks  = batch[1].to(logits.device)
-    loss   = _dice_ce(logits, masks)
-    return loss, {}
-
-
-def seg_metric_fn(all_outputs, all_batches):
-    logits = torch.cat(all_outputs,            dim=0)
-    masks  = torch.cat([b[1] for b in all_batches], dim=0)
-    return {
-        "val/dice":      compute_dice(logits, masks, num_classes=3),
-        "val/pixel_acc": compute_pixel_acc(logits, masks),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Strategy helpers
 # ---------------------------------------------------------------------------
 def apply_strategy(model: UNetVGG11, strategy: str):
-    """
-    frozen  : all encoder blocks frozen
-    partial : enc1-enc3 frozen, enc4-enc5 trainable
-    full    : everything trainable
-    """
-    enc_blocks = [model.enc1, model.enc2, model.enc3, model.enc4, model.enc5]
+    enc = model.encoder
+    for p in enc.parameters():
+        p.requires_grad = True
 
     if strategy == "frozen":
-        for block in enc_blocks:
-            for p in block.parameters():
-                p.requires_grad = False
-
+        for p in enc.parameters():
+            p.requires_grad = False
     elif strategy == "partial":
-        for block in enc_blocks[:3]:   # freeze early blocks
-            for p in block.parameters():
+        for blk in [enc.block1, enc.block2, enc.block3]:
+            for p in blk.parameters():
                 p.requires_grad = False
-        for block in enc_blocks[3:]:   # unfreeze last 2
-            for p in block.parameters():
-                p.requires_grad = True
 
-    elif strategy == "full":
-        for p in model.parameters():
-            p.requires_grad = True
-
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total     = sum(p.numel() for p in model.parameters())
-    print(f"  Strategy '{strategy}': {trainable:,} / {total:,} params trainable")
+    tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    tt = sum(p.numel() for p in model.parameters())
+    print(f"  '{strategy}': {tr:,}/{tt:,} params trainable ({100*tr/tt:.1f}%)")
 
 
-def load_encoder_weights(model: UNetVGG11, vgg11_ckpt: str):
-    """Transfer VGG11 weights into UNet encoder blocks."""
-    ckpt = torch.load(vgg11_ckpt, map_location="cpu")
-    sd   = ckpt["model"]
-
-    # Map features.N.* → enc blocks by layer index
-    # VGG11.features layout (0-indexed):
-    # Block1: 0-2 (conv,bn,relu) → enc1
-    # Block2: 4-6                → enc2
-    # Block3: 8-13               → enc3
-    # Block4: 15-20              → enc4
-    # Block5: 22-27              → enc5
-    ranges = [(0, 3, "enc1"), (4, 7, "enc2"), (8, 14, "enc3"),
-              (15, 21, "enc4"), (22, 28, "enc5")]
-
-    for start, end, attr in ranges:
-        block: torch.nn.Sequential = getattr(model, attr)
-        sub_sd = {}
-        for k, v in sd.items():
-            if not k.startswith("features."):
-                continue
-            idx = int(k.split(".")[1])
-            if start <= idx < end:
-                sub_key = ".".join(k.split(".")[2:])
-                # map into block's 0-indexed children
-                local_idx = idx - start
-                # find param name within block
-                sub_sd[f"{local_idx}.{sub_key}"] = v
-        missing, unexpected = block.load_state_dict(sub_sd, strict=False)
-        # Partial load is acceptable; report if needed.
-
-    print(f"  Encoder weights loaded from {vgg11_ckpt}")
+def save_checkpoint(model, tag, ckpt_dir, epoch, metric):
+    Path(ckpt_dir).mkdir(parents=True, exist_ok=True)
+    path = os.path.join(ckpt_dir, f"{tag}.pth")
+    torch.save({"state_dict": model.state_dict(),
+                "epoch": epoch, "metric": metric}, path)
+    return path
 
 
-# ---------------------------------------------------------------------------
-# Train one strategy
 # ---------------------------------------------------------------------------
 def train_strategy(args, strategy: str):
-    run_name = f"task3_unet_{strategy}"
-    init_wandb(project=args.wandb_project, run_name=run_name,
-               config={**vars(args), "strategy": strategy})
+    run_name = f"seg_{strategy}"
+    wandb.init(project=args.wandb_project, name=run_name,
+               config={**vars(args), "strategy": strategy}, reinit=True)
+    print(f"\nDevice: {DEVICE}  |  Strategy: {strategy}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"\nDevice: {device}  |  Strategy: {strategy}")
+    tr_ds = OxfordPetDataset(args.data_root, partition="train", mode="seg")
+    va_ds = OxfordPetDataset(args.data_root, partition="val",   mode="seg")
+    kw    = dict(batch_size=args.batch_size, num_workers=args.num_workers,
+                 pin_memory=True, collate_fn=collate_fn)
+    tr_dl = DataLoader(tr_ds, shuffle=True,  **kw)
+    va_dl = DataLoader(va_ds, shuffle=False, **kw)
 
-    model = UNetVGG11(num_classes=3)
-    load_encoder_weights(model, args.vgg11_ckpt)
+    model = UNetVGG11(num_classes=3).to(DEVICE)
+
+    if os.path.isfile(args.cls_ckpt):
+        model.load_encoder_from_checkpoint(args.cls_ckpt)
+
     apply_strategy(model, strategy)
 
+    seg_w   = torch.tensor([1.0, 0.8, 3.0], device=DEVICE)
+    ce_fn   = nn.CrossEntropyLoss(ignore_index=-1, weight=seg_w)
+    dice_fn = DiceCELoss(num_classes=3, ignore_index=-1)
+
     params    = [p for p in model.parameters() if p.requires_grad]
-    optimizer = Adam(params, lr=args.lr, weight_decay=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer, patience=3, factor=0.5, verbose=True)
+    optimiser = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimiser, T_max=args.epochs)
 
-    train_loader, val_loader, test_loader = get_dataloaders(
-        root=args.data_root, task="segmentation",
-        batch_size=args.batch_size, num_workers=args.num_workers
-    )
+    best_dice = 0.0
 
-    trainer = Trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        optimizer=optimizer,
-        loss_fn=seg_loss_fn,
-        metric_fn=seg_metric_fn,
-        scheduler=scheduler,
-        device=device,
-        save_dir=args.save_dir,
-        run_name=run_name,
-    )
-    trainer.fit(args.epochs)
+    for epoch in range(1, args.epochs + 1):
+        # ---- Train ----
+        model.train()
+        tr_loss = tr_n = 0
+        for batch in tr_dl:
+            imgs  = batch["image"].to(DEVICE)
+            masks = batch["mask"].to(DEVICE)
+            optimiser.zero_grad()
+            logits = model(imgs)
+            loss   = ce_fn(logits, masks) + dice_fn(logits, masks)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimiser.step()
+            tr_loss += loss.item() * imgs.size(0)
+            tr_n    += imgs.size(0)
+        scheduler.step()
+        tr_loss /= max(tr_n, 1)
 
-    # Log segmentation samples
-    model.eval()
-    images, masks = next(iter(test_loader))
-    images = images.to(device)
-    with torch.no_grad():
-        logits = model(images)
-    log_seg_samples(images.cpu(), masks, logits.cpu(), n=5, step=args.epochs)
+        # ---- Validate ----
+        model.eval()
+        va_loss  = va_n = 0.0
+        dice_acc = np.zeros(3)
+        px_ok    = px_tot = 0
+        seg_p, seg_t = [], []
+
+        with torch.no_grad():
+            for batch in va_dl:
+                imgs  = batch["image"].to(DEVICE)
+                masks = batch["mask"].to(DEVICE)
+                logits = model(imgs)
+                preds  = logits.argmax(1)
+                valid  = masks >= 0
+                n      = imgs.size(0)
+
+                va_loss += (ce_fn(logits, masks) + dice_fn(logits, masks)).item() * n
+
+                for c in range(3):
+                    tp = ((preds == c) & (masks == c) & valid).sum().item()
+                    fp = ((preds == c) & (masks != c) & valid).sum().item()
+                    fn = ((preds != c) & (masks == c) & valid).sum().item()
+                    d  = 2 * tp + fp + fn
+                    dice_acc[c] += (2 * tp / d if d > 0 else 0.0) * n
+
+                px_ok  += ((preds == masks) & valid).sum().item()
+                px_tot += valid.sum().item()
+                va_n   += n
+                seg_p.append(preds[valid].cpu())
+                seg_t.append(masks[valid].cpu())
+
+        va_loss    /= max(va_n, 1)
+        per_dice    = dice_acc / max(va_n, 1)
+        macro_dice  = float(per_dice.mean())
+        px_acc      = px_ok / max(px_tot, 1)
+        seg_f1      = f1_score(torch.cat(seg_t).numpy(),
+                               torch.cat(seg_p).numpy(),
+                               average="macro", zero_division=0)
+
+        wandb.log({
+            "epoch":          epoch,
+            "lr":             scheduler.get_last_lr()[0],
+            "train/loss":     tr_loss,
+            "val/loss":       va_loss,
+            "val/macro_dice": macro_dice,
+            "val/pixel_acc":  px_acc,
+            "val/seg_f1":     seg_f1,
+        })
+
+        print(f"  Ep {epoch:03d}  tr={tr_loss:.4f}  va={va_loss:.4f}  "
+              f"dice={macro_dice:.4f}  px={px_acc:.4f}")
+
+        if macro_dice > best_dice:
+            best_dice = macro_dice
+            save_checkpoint(model, "unet", args.save_dir, epoch, best_dice)
 
     wandb.finish()
+    print(f"Best val macro-Dice: {best_dice:.4f}")
 
 
-# ---------------------------------------------------------------------------
-# Main
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root",      default=r"D:\code\repo\DL_Assigment_2\temp")
-    parser.add_argument("--vgg11_ckpt",     default=r"D:\code\repo\DL_Assigment_2\outputs\vgg11_bn1_dp0.5_best.pt")
-    parser.add_argument("--strategy",      default="all",
-                        choices=["frozen", "partial", "full", "all"])
-    parser.add_argument("--epochs",        type=int,   default=25)
-    parser.add_argument("--batch_size",    type=int,   default=16)
-    parser.add_argument("--lr",            type=float, default=1e-4)
-    parser.add_argument("--num_workers",   type=int,   default=4)
-    parser.add_argument("--save_dir",      default="outputs")
-    parser.add_argument("--wandb_project", default="da6401_a2")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--data_root",     required=True)
+    p.add_argument("--cls_ckpt",      default="checkpoints/classifier.pth")
+    p.add_argument("--strategy",      default="all",
+                   choices=["frozen", "partial", "full", "all"])
+    p.add_argument("--epochs",        type=int,   default=50)
+    p.add_argument("--batch_size",    type=int,   default=16)
+    p.add_argument("--lr",            type=float, default=5e-4)
+    p.add_argument("--num_workers",   type=int,   default=4)
+    p.add_argument("--save_dir",      default="checkpoints")
+    p.add_argument("--wandb_project", default="da6401_a2")
+    args = p.parse_args()
 
-    os.makedirs(args.save_dir, exist_ok=True)
-
-    strategies = ["frozen", "partial", "full"] if args.strategy == "all" else [args.strategy]
+    strategies = (["frozen", "partial", "full"]
+                  if args.strategy == "all" else [args.strategy])
     for s in strategies:
         train_strategy(args, s)
 

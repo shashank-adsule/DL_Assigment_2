@@ -2,18 +2,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .vgg11 import VGG11Encoder
+from .layers import CustomDropout
+
 
 # ---------------------------------------------------------------------------
-# Helper: a double-conv block used in the decoder
+# Helper: double conv block used in the decoder
 # ---------------------------------------------------------------------------
 class DoubleConv(nn.Module):
     def __init__(self, in_ch: int, out_ch: int):
         super().__init__()
         self.block = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=False),
             nn.BatchNorm2d(out_ch),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False),
             nn.BatchNorm2d(out_ch),
             nn.ReLU(inplace=True),
         )
@@ -26,141 +29,142 @@ class DoubleConv(nn.Module):
 # Combined Dice + CrossEntropy loss
 # ---------------------------------------------------------------------------
 class DiceCELoss(nn.Module):
+    """
+    Weighted sum of CrossEntropy and soft Dice loss.
 
-    def __init__(self, num_classes=3, dice_weight=0.5, ce_weight=0.5, eps=1e-6):
+    CE provides stable per-pixel gradients; Dice optimises the overlap
+    metric directly and handles class imbalance (background dominates
+    the trimap pixel distribution ~50:40:10).
+    """
+
+    def __init__(self, num_classes=3, dice_weight=0.5, ce_weight=0.5,
+                 eps=1e-6, ignore_index=-1):
         super().__init__()
         self.num_classes  = num_classes
         self.dice_weight  = dice_weight
         self.ce_weight    = ce_weight
         self.eps          = eps
-        self.ce           = nn.CrossEntropyLoss()
+        self.ce           = nn.CrossEntropyLoss(ignore_index=ignore_index)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         ce_loss = self.ce(logits, targets)
 
-        # Dice over softmax probabilities
-        probs   = F.softmax(logits, dim=1)                  # (B, C, H, W)
-        targets_oh = F.one_hot(targets, self.num_classes)   # (B, H, W, C)
-        targets_oh = targets_oh.permute(0, 3, 1, 2).float() # (B, C, H, W)
+        # Soft Dice over softmax probabilities
+        probs      = F.softmax(logits, dim=1)
+        valid      = (targets != -1)
+        tgt_clamped = targets.clone()
+        tgt_clamped[~valid] = 0
+        targets_oh  = F.one_hot(tgt_clamped, self.num_classes).permute(0, 3, 1, 2).float()
+        mask        = valid.unsqueeze(1).float()
+        probs       = probs * mask
+        targets_oh  = targets_oh * mask
 
-        dims = (0, 2, 3)  # average over batch and spatial dims
+        dims         = (0, 2, 3)
         intersection = (probs * targets_oh).sum(dim=dims)
         cardinality  = probs.sum(dim=dims) + targets_oh.sum(dim=dims)
-        dice_per_class = (2.0 * intersection + self.eps) / (cardinality + self.eps)
-        dice_loss = 1.0 - dice_per_class.mean()
+        dice_per_cls = (2.0 * intersection + self.eps) / (cardinality + self.eps)
+        dice_loss    = 1.0 - dice_per_cls.mean()
 
         return self.ce_weight * ce_loss + self.dice_weight * dice_loss
 
 
 # ---------------------------------------------------------------------------
-# U-Net segmentation model
+# U-Net decoder block
+# ---------------------------------------------------------------------------
+class UpBlock(nn.Module):
+    """
+    One decoder stage:
+      1. ConvTranspose2d doubles spatial resolution (learnable upsampling).
+      2. Concatenate encoder skip tensor channel-wise.
+      3. Two Conv-BN-ReLU layers refine the result.
+    """
+
+    def __init__(self, in_ch: int, skip_ch: int, out_ch: int):
+        super().__init__()
+        self.upsample = nn.ConvTranspose2d(in_ch, in_ch, kernel_size=2, stride=2)
+        self.refine   = DoubleConv(in_ch + skip_ch, out_ch)
+
+    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        x = self.upsample(x)
+        # Guard ±1 pixel mismatch from odd input dims
+        if x.shape[2:] != skip.shape[2:]:
+            skip = skip[:, :, : x.shape[2], : x.shape[3]]
+        x = torch.cat([x, skip], dim=1)
+        return self.refine(x)
+
+
+# ---------------------------------------------------------------------------
+# U-Net style segmentation model
 # ---------------------------------------------------------------------------
 class UNetVGG11(nn.Module):
+    """
+    U-Net with a VGG-11 encoder backbone.
 
-    def __init__(self, num_classes: int = 3, freeze_encoder: bool = False):
+    The encoder is a VGG11Encoder instance so its weights can be loaded
+    directly from a classification checkpoint without any key remapping.
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 3,
+        in_channels: int = 3,
+        dropout_p: float = 0.5,
+    ):
         super().__init__()
 
-        # ---- Encoder blocks (mirrors VGG11.features) ----
-        # Each enc_blockN outputs a skip feature map BEFORE pooling.
-        self.enc1 = nn.Sequential(          # 3 → 64,  224→224
-            nn.Conv2d(3,   64,  3, padding=1), nn.BatchNorm2d(64),  nn.ReLU(inplace=True),
-        )
-        self.pool1 = nn.MaxPool2d(2, 2)    # → 112
+        # ---- Encoder (contracting path) ----
+        self.encoder = VGG11Encoder(in_channels=in_channels)
 
-        self.enc2 = nn.Sequential(          # 64 → 128, 112→112
-            nn.Conv2d(64,  128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(inplace=True),
-        )
-        self.pool2 = nn.MaxPool2d(2, 2)    # → 56
+        # ---- Decoder (expansive path) ----
+        self.up5 = UpBlock(512, 512, 512)   #   7 → 14
+        self.up4 = UpBlock(512, 512, 256)   #  14 → 28
+        self.up3 = UpBlock(256, 256, 128)   #  28 → 56
+        self.up2 = UpBlock(128, 128,  64)   #  56 → 112
+        self.up1 = UpBlock( 64,  64,  32)   # 112 → 224
 
-        self.enc3 = nn.Sequential(          # 128 → 256, 56→56
-            nn.Conv2d(128, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(inplace=True),
-        )
-        self.pool3 = nn.MaxPool2d(2, 2)    # → 28
+        self.pre_output  = CustomDropout(p=dropout_p)
+        self.output_conv = nn.Conv2d(32, num_classes, kernel_size=1)
 
-        self.enc4 = nn.Sequential(          # 256 → 512, 28→28
-            nn.Conv2d(256, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
-        )
-        self.pool4 = nn.MaxPool2d(2, 2)    # → 14
+        self._init_decoder()
 
-        self.enc5 = nn.Sequential(          # 512 → 512, 14→14
-            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(inplace=True),
-        )
-        self.pool5 = nn.MaxPool2d(2, 2)    # → 7
+    def _init_decoder(self):
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out",
+                                        nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
 
-        # Bottleneck
-        self.bottleneck = DoubleConv(512, 512)
-
-        # ---- Decoder: ConvTranspose2d for learnable upsampling ----
-        # Up-block: TransposedConv doubles spatial res, then DoubleConv refines.
-        # Skip concat doubles channels before DoubleConv.
-
-        self.up5   = nn.ConvTranspose2d(512, 512, kernel_size=2, stride=2)  # 7 → 14
-        self.dec5  = DoubleConv(512 + 512, 512)
-
-        self.up4   = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)  # 14 → 28
-        self.dec4  = DoubleConv(256 + 512, 256)
-
-        self.up3   = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)  # 28 → 56
-        self.dec3  = DoubleConv(128 + 256, 128)
-
-        self.up2   = nn.ConvTranspose2d(128, 64,  kernel_size=2, stride=2)  # 56 → 112
-        self.dec2  = DoubleConv(64  + 128, 64)
-
-        self.up1   = nn.ConvTranspose2d(64,  32,  kernel_size=2, stride=2)  # 112 → 224
-        self.dec1  = DoubleConv(32  + 64,  32)
-
-        # 1×1 output head
-        self.out_conv = nn.Conv2d(32, num_classes, kernel_size=1)
-
-        if freeze_encoder:
-            for block in [self.enc1, self.enc2, self.enc3, self.enc4, self.enc5]:
-                for param in block.parameters():
-                    param.requires_grad = False
-
-    def load_encoder_from_vgg11(self, vgg11_state_dict: dict):
-        # Map: features index → encoder block attribute
-        # VGG11.features indices: see vgg11.py
-        block_map = {
-            # (start_idx, end_idx) in features → attribute name
-            (0,  3):  "enc1",   # conv1 + bn + relu
-            (4,  7):  "enc2",   # conv2 + bn + relu
-            (8,  14): "enc3",   # 2× conv+bn+relu
-            (15, 21): "enc4",
-            (22, 28): "enc5",
-        }
-        features_state = {
-            k.replace("features.", ""): v
-            for k, v in vgg11_state_dict.items()
-            if k.startswith("features.")
-        }
-
-        for (start, end), attr in block_map.items():
-            block: nn.Sequential = getattr(self, attr)
-            sub_keys = {
-                str(i - start): v
-                for i, v in features_state.items()
-                if isinstance(i, int) and start <= i < end
-            }
-            block.load_state_dict(sub_keys, strict=False)
+    def load_encoder_from_checkpoint(self, ckpt_path: str) -> None:
+        """
+        Load encoder weights from a classifier checkpoint.
+        The checkpoint is expected to have a 'state_dict' key whose
+        entries start with 'encoder.' (saved by train.py / PetClassifier).
+        """
+        raw = torch.load(ckpt_path, map_location="cpu")
+        sd  = raw.get("state_dict", raw)
+        enc_sd = {k[len("encoder."):]: v for k, v in sd.items()
+                  if k.startswith("encoder.")}
+        miss, unexp = self.encoder.load_state_dict(enc_sd, strict=False)
+        print(f"  [UNetVGG11] encoder loaded from '{ckpt_path}'  "
+              f"missing={len(miss)} unexpected={len(unexp)}")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # ---- Encoder + skip connections ----
-        s1 = self.enc1(x)       # (B, 64,  H,   W)
-        s2 = self.enc2(self.pool1(s1))   # (B, 128, H/2, W/2)
-        s3 = self.enc3(self.pool2(s2))   # (B, 256, H/4, W/4)
-        s4 = self.enc4(self.pool3(s3))   # (B, 512, H/8, W/8)
-        s5 = self.enc5(self.pool4(s4))   # (B, 512, H/16,W/16)
+        neck, skips = self.encoder(x, return_features=True)
 
-        x  = self.bottleneck(self.pool5(s5))  # (B, 512, H/32, W/32)
+        d = self.up5(neck,  skips["b5"])
+        d = self.up4(d,     skips["b4"])
+        d = self.up3(d,     skips["b3"])
+        d = self.up2(d,     skips["b2"])
+        d = self.up1(d,     skips["b1"])
 
-        # ---- Decoder with skip fusion ----
-        x = self.dec5(torch.cat([self.up5(x), s5], dim=1))
-        x = self.dec4(torch.cat([self.up4(x), s4], dim=1))
-        x = self.dec3(torch.cat([self.up3(x), s3], dim=1))
-        x = self.dec2(torch.cat([self.up2(x), s2], dim=1))
-        x = self.dec1(torch.cat([self.up1(x), s1], dim=1))
+        d = self.pre_output(d)
+        return self.output_conv(d)   # [B, num_classes, H, W]
 
-        return self.out_conv(x)  # (B, num_classes, H, W)
+
+# Aliases
+DecoderBlock = UpBlock
+VGG11UNet    = UNetVGG11

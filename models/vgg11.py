@@ -1,93 +1,170 @@
+from typing import Dict, Tuple, Union
+
 import torch
 import torch.nn as nn
+
 from .layers import CustomDropout
 
+IMAGE_SIZE = 224
+_BOTTLENECK_DIM = 512 * 7 * 7   # 25088
+
+
+def _conv_bn_relu(in_ch: int, out_ch: int) -> nn.Sequential:
+    """3×3 conv → BN → ReLU block (padding=1 keeps spatial dims)."""
+    return nn.Sequential(
+        nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
+        nn.BatchNorm2d(out_ch),
+        nn.ReLU(inplace=True),
+    )
+
+
 class VGG11Encoder(nn.Module):
-    def __init__(self, num_classes: int = 37, dropout_p: float = 0.5):
+    """
+    VGG-11 encoder with BatchNorm.
+
+    Supports two usage modes:
+      1. Feature extractor only — call forward(x, return_features=False)
+         returns bottleneck [B, 512, 7, 7].
+      2. Full classifier — instantiate with num_classes > 0;
+         call forward(x) returns class logits [B, num_classes].
+
+    Feature map sizes for 224×224 input:
+        b1 → (B,  64, 224, 224)
+        b2 → (B, 128, 112, 112)
+        b3 → (B, 256,  56,  56)
+        b4 → (B, 512,  28,  28)
+        b5 → (B, 512,  14,  14)
+        bottleneck → (B, 512,  7,   7)
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 3,
+        num_classes: int = 0,       # 0 = encoder-only mode
+        dropout_p: float = 0.5,
+    ):
         super().__init__()
 
-        self.features = nn.Sequential(
-            # ---- Block 1: 3 → 64, 224×224 → 112×112 ----
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),          # 112×112
+        # ---- 5 convolutional blocks (VGG-11 topology) ----
+        self.block1 = nn.Sequential(_conv_bn_relu(in_channels, 64))
+        self.pool1  = nn.MaxPool2d(kernel_size=2, stride=2)
 
-            # ---- Block 2: 64 → 128, 112×112 → 56×56 ----
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),          # 56×56
+        self.block2 = nn.Sequential(_conv_bn_relu(64, 128))
+        self.pool2  = nn.MaxPool2d(kernel_size=2, stride=2)
 
-            # ---- Block 3: 128 → 256 → 256, 56×56 → 28×28 ----
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),          # 28×28
-
-            # ---- Block 4: 256 → 512 → 512, 28×28 → 14×14 ----
-            nn.Conv2d(256, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),          # 14×14
-
-            # ---- Block 5: 512 → 512 → 512, 14×14 → 7×7 ----
-            nn.Conv2d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),          # 7×7
+        self.block3 = nn.Sequential(
+            _conv_bn_relu(128, 256),
+            _conv_bn_relu(256, 256),
         )
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # AdaptiveAvgPool makes the model robust to inputs != 224×224
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
-
-        # ---- Classifier ----
-        self.classifier = nn.Sequential(
-            nn.Linear(512 * 7 * 7, 4096),
-            nn.ReLU(inplace=True),
-            CustomDropout(p=dropout_p),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            CustomDropout(p=dropout_p),
-            nn.Linear(4096, num_classes),
+        self.block4 = nn.Sequential(
+            _conv_bn_relu(256, 512),
+            _conv_bn_relu(512, 512),
         )
+        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.block5 = nn.Sequential(
+            _conv_bn_relu(512, 512),
+            _conv_bn_relu(512, 512),
+        )
+        self.pool5 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # ---- Optional classifier head ----
+        self.num_classes = num_classes
+        if num_classes > 0:
+            self.avgpool    = nn.AdaptiveAvgPool2d((7, 7))
+            self.classifier = nn.Sequential(
+                nn.Linear(_BOTTLENECK_DIM, 4096),
+                nn.BatchNorm1d(4096),
+                nn.ReLU(inplace=True),
+                CustomDropout(p=dropout_p),
+                nn.Linear(4096, 4096),
+                nn.BatchNorm1d(4096),
+                nn.ReLU(inplace=True),
+                CustomDropout(p=dropout_p),
+                nn.Linear(4096, num_classes),
+            )
 
         self._init_weights()
 
-    def _init_weights(self):
-        """Kaiming Normal for conv layers; zero-bias throughout."""
+    # ------------------------------------------------------------------
+    def _init_weights(self) -> None:
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.kaiming_normal_(m.weight, mode="fan_out",
+                                        nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.trunc_normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.features(x)       # (B, 512, 7, 7)
-        x = self.avgpool(x)        # (B, 512, 7, 7)  — no-op if input was 224
-        x = torch.flatten(x, 1)   # (B, 25088)
-        x = self.classifier(x)    # (B, num_classes)
-        return x
-
+    # ------------------------------------------------------------------
     def get_backbone(self) -> nn.Sequential:
-        return self.features
+        """
+        Return the five conv blocks + pools as a single Sequential.
+        Used by LocalizationModel to extract features.
+        """
+        return nn.Sequential(
+            self.block1, self.pool1,
+            self.block2, self.pool2,
+            self.block3, self.pool3,
+            self.block4, self.pool4,
+            self.block5, self.pool5,
+        )
+
+    # ------------------------------------------------------------------
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_features: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+        """
+        Args:
+            x:               Input image tensor [B, C, H, W].
+            return_features: If True, also return skip maps {b1…b5}.
+                             Only valid in encoder-only mode (num_classes=0).
+        Returns:
+            num_classes > 0, return_features=False → class logits [B, C]
+            num_classes = 0, return_features=False → bottleneck [B, 512, 7, 7]
+            num_classes = 0, return_features=True  → (bottleneck, {b1…b5})
+        """
+        f1 = self.block1(x)
+        p1 = self.pool1(f1)
+
+        f2 = self.block2(p1)
+        p2 = self.pool2(f2)
+
+        f3 = self.block3(p2)
+        p3 = self.pool3(f3)
+
+        f4 = self.block4(p3)
+        p4 = self.pool4(f4)
+
+        f5 = self.block5(p4)
+        bottleneck = self.pool5(f5)
+
+        # Full classifier mode
+        if self.num_classes > 0:
+            out = self.avgpool(bottleneck)
+            out = torch.flatten(out, 1)
+            return self.classifier(out)
+
+        # Encoder-only mode
+        if return_features:
+            features = {"b1": f1, "b2": f2, "b3": f3, "b4": f4, "b5": f5}
+            return bottleneck, features
+
+        return bottleneck
 
 
-# Backward-compatibility alias — autograder imports VGG11Encoder,
-# other internal code may still use VGG11.
+# Alias required by autograder: from models.vgg11 import VGG11
 VGG11 = VGG11Encoder
