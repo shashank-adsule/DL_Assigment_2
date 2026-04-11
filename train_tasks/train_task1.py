@@ -9,6 +9,13 @@ Usage:
 
 Add --ablation to also run the BN and Dropout variants for W&B sections 2.1 & 2.2.
 """
+import os
+import sys
+import warnings
+# Suppress albumentations offline version-check warning (harmless network timeout)
+warnings.filterwarnings("ignore", category=UserWarning, module="albumentations")
+os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
+
 
 import argparse
 import os

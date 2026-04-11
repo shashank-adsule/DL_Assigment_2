@@ -1,4 +1,9 @@
+import os
+import warnings
 import xml.etree.ElementTree as ET
+# Suppress albumentations offline version-check warning
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+warnings.filterwarnings("ignore", category=UserWarning, module="albumentations")
 from pathlib import Path
 from typing import List, Optional
 
@@ -81,16 +86,6 @@ def get_val_transforms() -> A.Compose:
 # ---------------------------------------------------------------------------
 
 class OxfordPetDataset(Dataset):
-    """
-    Args:
-        root:      Root directory (contains images/ and annotations/).
-        partition: 'train' | 'val' | 'test'.
-        mode:      'cls' | 'loc' | 'seg' | 'all'.
-        pipeline:  Override the default augmentation pipeline.
-        test_frac: Fraction held out for test. Default 0.10.
-        val_frac:  Fraction of remaining data used for val. Default 0.10.
-    """
-
     def __init__(
         self,
         root: str,
@@ -259,8 +254,6 @@ def collate_fn(batch: List[dict]) -> dict:
         "bbox":      bboxes,
         "bbox_mask": bbox_masks,
     }
-
-
 # ---------------------------------------------------------------------------
 # Convenience loader builder (kept for backward compat with train_tasks/)
 # ---------------------------------------------------------------------------
@@ -290,7 +283,6 @@ def get_dataloaders(
         DataLoader(va, shuffle=False, **loader_kw),
         DataLoader(te, shuffle=False, **loader_kw),
     )
-
 
 # Aliases
 OxfordIIITPetDataset = OxfordPetDataset

@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from .vgg11 import VGG11Encoder
 from .layers import CustomDropout
 
-
 # ---------------------------------------------------------------------------
 # Helper: double conv block used in the decoder
 # ---------------------------------------------------------------------------
@@ -29,13 +28,6 @@ class DoubleConv(nn.Module):
 # Combined Dice + CrossEntropy loss
 # ---------------------------------------------------------------------------
 class DiceCELoss(nn.Module):
-    """
-    Weighted sum of CrossEntropy and soft Dice loss.
-
-    CE provides stable per-pixel gradients; Dice optimises the overlap
-    metric directly and handles class imbalance (background dominates
-    the trimap pixel distribution ~50:40:10).
-    """
 
     def __init__(self, num_classes=3, dice_weight=0.5, ce_weight=0.5,
                  eps=1e-6, ignore_index=-1):
@@ -72,12 +64,6 @@ class DiceCELoss(nn.Module):
 # U-Net decoder block
 # ---------------------------------------------------------------------------
 class UpBlock(nn.Module):
-    """
-    One decoder stage:
-      1. ConvTranspose2d doubles spatial resolution (learnable upsampling).
-      2. Concatenate encoder skip tensor channel-wise.
-      3. Two Conv-BN-ReLU layers refine the result.
-    """
 
     def __init__(self, in_ch: int, skip_ch: int, out_ch: int):
         super().__init__()
@@ -97,12 +83,6 @@ class UpBlock(nn.Module):
 # U-Net style segmentation model
 # ---------------------------------------------------------------------------
 class UNetVGG11(nn.Module):
-    """
-    U-Net with a VGG-11 encoder backbone.
-
-    The encoder is a VGG11Encoder instance so its weights can be loaded
-    directly from a classification checkpoint without any key remapping.
-    """
 
     def __init__(
         self,
@@ -139,11 +119,6 @@ class UNetVGG11(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def load_encoder_from_checkpoint(self, ckpt_path: str) -> None:
-        """
-        Load encoder weights from a classifier checkpoint.
-        The checkpoint is expected to have a 'state_dict' key whose
-        entries start with 'encoder.' (saved by train.py / PetClassifier).
-        """
         raw = torch.load(ckpt_path, map_location="cpu")
         sd  = raw.get("state_dict", raw)
         enc_sd = {k[len("encoder."):]: v for k, v in sd.items()

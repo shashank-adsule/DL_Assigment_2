@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-
 class IoULoss(nn.Module):
 
     def __init__(self, reduction: str = 'mean', eps: float = 1e-6):

@@ -1,9 +1,3 @@
-"""
-models/classification.py
--------------------------
-Classification head and full VGG-11 classifier.
-"""
-
 import torch
 import torch.nn as nn
 
@@ -14,12 +8,6 @@ _BOTTLENECK_DIM = 512 * 7 * 7   # 25088
 
 
 class FCHead(nn.Module):
-    """
-    Fully-connected classification head.
-
-    Layout: Flatten → [Linear → BN1d → ReLU → Dropout] × 2 → Linear
-    """
-
     def __init__(self, num_classes: int = 37, drop_rate: float = 0.5):
         super().__init__()
         self.net = nn.Sequential(
@@ -51,7 +39,6 @@ class FCHead(nn.Module):
 
 class PetClassifier(nn.Module):
     """Full classifier: VGG11Encoder + FCHead."""
-
     def __init__(self, num_classes: int = 37, in_channels: int = 3,
                  drop_rate: float = 0.5):
         super().__init__()

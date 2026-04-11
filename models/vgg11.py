@@ -19,24 +19,6 @@ def _conv_bn_relu(in_ch: int, out_ch: int) -> nn.Sequential:
 
 
 class VGG11Encoder(nn.Module):
-    """
-    VGG-11 encoder with BatchNorm.
-
-    Supports two usage modes:
-      1. Feature extractor only — call forward(x, return_features=False)
-         returns bottleneck [B, 512, 7, 7].
-      2. Full classifier — instantiate with num_classes > 0;
-         call forward(x) returns class logits [B, num_classes].
-
-    Feature map sizes for 224×224 input:
-        b1 → (B,  64, 224, 224)
-        b2 → (B, 128, 112, 112)
-        b3 → (B, 256,  56,  56)
-        b4 → (B, 512,  28,  28)
-        b5 → (B, 512,  14,  14)
-        bottleneck → (B, 512,  7,   7)
-    """
-
     def __init__(
         self,
         in_channels: int = 3,
@@ -109,10 +91,6 @@ class VGG11Encoder(nn.Module):
 
     # ------------------------------------------------------------------
     def get_backbone(self) -> nn.Sequential:
-        """
-        Return the five conv blocks + pools as a single Sequential.
-        Used by LocalizationModel to extract features.
-        """
         return nn.Sequential(
             self.block1, self.pool1,
             self.block2, self.pool2,
@@ -127,16 +105,6 @@ class VGG11Encoder(nn.Module):
         x: torch.Tensor,
         return_features: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        """
-        Args:
-            x:               Input image tensor [B, C, H, W].
-            return_features: If True, also return skip maps {b1…b5}.
-                             Only valid in encoder-only mode (num_classes=0).
-        Returns:
-            num_classes > 0, return_features=False → class logits [B, C]
-            num_classes = 0, return_features=False → bottleneck [B, 512, 7, 7]
-            num_classes = 0, return_features=True  → (bottleneck, {b1…b5})
-        """
         f1 = self.block1(x)
         p1 = self.pool1(f1)
 

@@ -1,23 +1,3 @@
-"""
-models/multitask.py
---------------------
-Unified multi-task model (Task 4).
-
-Why three separate encoders?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Each task head was trained against features from its OWN dedicated
-VGG-11 backbone. Using a single shared encoder at inference time
-causes the heads whose encoder is replaced to receive a completely
-different feature distribution from training, collapsing their metrics.
-
-Three independent encoders — each loaded from its own checkpoint —
-ensures every head always sees the feature statistics it was optimised
-on, while a single forward() satisfies the assignment API.
-
-Autograder import:
-    from models.multitask import MultiTaskPerceptionModel
-"""
-
 import os
 
 import torch
@@ -42,11 +22,6 @@ def _strip_prefix(sd: dict, prefix: str) -> dict:
 
 
 class MultiTaskPerceptionModel(nn.Module):
-    """
-    Single forward-pass model returning classification, localisation,
-    and segmentation outputs simultaneously.
-    """
-
     def __init__(
         self,
         num_breeds:  int = 37,
@@ -136,16 +111,6 @@ class MultiTaskPerceptionModel(nn.Module):
 
     # ------------------------------------------------------------------
     def forward(self, x: torch.Tensor) -> dict:
-        """
-        Single forward pass.
-
-        Returns:
-            {
-              'classification': [B, num_breeds]          class logits
-              'localization'  : [B, 4]                   (cx,cy,w,h) pixels
-              'segmentation'  : [B, seg_classes, H, W]
-            }
-        """
         # Classification branch
         cls_out = self.cls_head(self.enc_cls(x, return_features=False))
 

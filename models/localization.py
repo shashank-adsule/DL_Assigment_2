@@ -8,13 +8,6 @@ _BOTTLENECK_DIM = 512 * 7 * 7   # 25088
 
 
 class BBoxHead(nn.Module):
-    """
-    Regression head: bottleneck → (cx, cy, w, h) in pixel space.
-
-    Sigmoid × IMAGE_SIZE bounds all outputs to (0, IMAGE_SIZE),
-    preventing degenerate predictions outside the image plane.
-    """
-
     def __init__(self, dropout_p: float = 0.5):
         super().__init__()
         self.layers = nn.Sequential(
@@ -43,16 +36,6 @@ class BBoxHead(nn.Module):
 
 
 class LocalizationModel(nn.Module):
-    """
-    VGG-11 encoder + bounding-box regression head.
-
-    The encoder and head are stored as `encoder` and `head` so that
-    checkpoint prefixes can be stripped easily in the multi-task loader.
-
-    Args:
-        freeze_backbone: If True the encoder weights are frozen.
-    """
-
     def __init__(self, in_channels: int = 3, dropout_p: float = 0.5,
                  freeze_backbone: bool = False):
         super().__init__()
