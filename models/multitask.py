@@ -141,17 +141,18 @@ class MultiTaskVGG11(nn.Module):
                 nn.init.normal_(m.weight, 0, 0.01)
                 nn.init.zeros_(m.bias)
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> dict:
         """
-        Single forward pass returning all three task outputs.
+        Single forward pass returning all three task outputs as a dict.
 
         Args:
             x (Tensor): (B, 3, H, W)
 
         Returns:
-            cls_logits (Tensor): (B, 37)          — breed classification
-            bbox       (Tensor): (B, 4)           — [cx, cy, w, h] in [0,1]
-            seg_logits (Tensor): (B, C, H, W)     — segmentation map
+            dict with keys:
+              'classification' : Tensor (B, num_classes)       — raw logits
+              'localization'   : Tensor (B, 4)                 — [cx, cy, w, h] in [0,1]
+              'segmentation'   : Tensor (B, num_seg_classes, H, W)
         """
         # ---- Shared encoder ----
         s1 = self.enc1(x)
@@ -164,7 +165,7 @@ class MultiTaskVGG11(nn.Module):
         # ---- Classification and localization use global-pooled features ----
         global_feat = torch.flatten(self.avgpool(s5), 1)   # (B, 25088)
 
-        cls_logits = self.cls_head(global_feat)             # (B, 37)
+        cls_logits = self.cls_head(global_feat)             # (B, num_classes)
         bbox       = self.loc_head(global_feat)             # (B, 4)
 
         # ---- Segmentation decoder ----
@@ -174,9 +175,14 @@ class MultiTaskVGG11(nn.Module):
         d = self.dec3(torch.cat([self.up3(d), s3], dim=1))
         d = self.dec2(torch.cat([self.up2(d), s2], dim=1))
         d = self.dec1(torch.cat([self.up1(d), s1], dim=1))
-        seg_logits = self.seg_out(d)                        # (B, C, H, W)
+        seg_logits = self.seg_out(d)                        # (B, num_seg_classes, H, W)
 
-        return cls_logits, bbox, seg_logits
+        # Return as dict — autograder expects these exact keys
+        return {
+            'classification': cls_logits,
+            'localization':   bbox,
+            'segmentation':   seg_logits,
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -1,11 +1,9 @@
 """
 losses/iou_loss.py
 
-The autograder imports IoULoss from this exact path:
-    from losses.iou_loss import IoULoss
-
-Boxes are in [x_center, y_center, width, height] format normalised to [0, 1].
-Loss = 1 - IoU, averaged over the batch.
+Autograder instantiates as: IoULoss(reduction='mean')
+Boxes are in [x_center, y_center, width, height] format, normalised to [0, 1].
+Loss = 1 - IoU, reduced over the batch according to `reduction`.
 """
 
 import torch
@@ -17,12 +15,16 @@ class IoULoss(nn.Module):
     Intersection over Union loss for bounding box regression.
 
     Args:
-        eps (float): small value added to denominator for numerical stability
-                     and to keep gradients viable when boxes do not overlap.
+        reduction (str): 'mean' | 'sum' | 'none'  — matches PyTorch convention.
+                         Default: 'mean'
+        eps (float): small value added to denominator for numerical stability.
     """
 
-    def __init__(self, eps: float = 1e-6):
+    def __init__(self, reduction: str = 'mean', eps: float = 1e-6):
         super().__init__()
+        if reduction not in ('mean', 'sum', 'none'):
+            raise ValueError(f"reduction must be 'mean', 'sum', or 'none', got '{reduction}'")
+        self.reduction = reduction
         self.eps = eps
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -32,9 +34,9 @@ class IoULoss(nn.Module):
             target (Tensor): (B, 4) — ground truth [cx, cy, w, h] in [0, 1]
 
         Returns:
-            Scalar loss = mean(1 - IoU) over the batch.
+            Scalar loss (or per-sample tensor if reduction='none').
         """
-        # ---- Convert cx/cy/w/h → x1/y1/x2/y2 ----
+        # ---- Convert cx/cy/w/h  →  x1/y1/x2/y2 ----
         pred_x1 = pred[:, 0] - pred[:, 2] / 2
         pred_y1 = pred[:, 1] - pred[:, 3] / 2
         pred_x2 = pred[:, 0] + pred[:, 2] / 2
@@ -60,9 +62,15 @@ class IoULoss(nn.Module):
         area_tgt  = (tgt_x2  - tgt_x1).clamp(min=0)  * (tgt_y2  - tgt_y1).clamp(min=0)
         union = area_pred + area_tgt - intersection + self.eps
 
-        iou = intersection / union
+        iou  = intersection / union
+        loss = 1.0 - iou           # per-sample loss, shape (B,)
 
-        return (1.0 - iou).mean()
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:   # 'none'
+            return loss
 
     def extra_repr(self) -> str:
-        return f"eps={self.eps}"
+        return f"reduction='{self.reduction}', eps={self.eps}"  

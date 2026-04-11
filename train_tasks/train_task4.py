@@ -35,10 +35,12 @@ _mt_loss = None   # initialised in main after args are parsed
 
 def mt_loss_fn(outputs, batch):
     """
-    outputs = (cls_logits, bbox, seg_logits)
+    outputs = dict with keys 'classification', 'localization', 'segmentation'
     batch   = (images, labels, bboxes, masks)
     """
-    cls_logits, bbox_pred, seg_logits = outputs
+    cls_logits = outputs['classification']
+    bbox_pred  = outputs['localization']
+    seg_logits = outputs['segmentation']
     _, labels, bboxes, masks = batch
     device = cls_logits.device
 
@@ -50,9 +52,9 @@ def mt_loss_fn(outputs, batch):
 
 
 def mt_metric_fn(all_outputs, all_batches):
-    all_cls   = torch.cat([o[0] for o in all_outputs])
-    all_bbox  = torch.cat([o[1] for o in all_outputs])
-    all_seg   = torch.cat([o[2] for o in all_outputs])
+    all_cls   = torch.cat([o['classification'] for o in all_outputs])
+    all_bbox  = torch.cat([o['localization']   for o in all_outputs])
+    all_seg   = torch.cat([o['segmentation']   for o in all_outputs])
 
     all_labels = torch.cat([b[1] for b in all_batches])
     all_gts    = torch.cat([b[2] for b in all_batches])
@@ -181,8 +183,8 @@ def main():
     batch = next(iter(test_loader))
     images = batch[0].to(device)
     with torch.no_grad():
-        _, _, seg_logits = model(images)
-    log_seg_samples(images.cpu(), batch[3], seg_logits.cpu(), n=5,
+        out = model(images)
+    log_seg_samples(images.cpu(), batch[3], out['segmentation'].cpu(), n=5,
                     step=args.epochs)
 
     wandb.finish()
