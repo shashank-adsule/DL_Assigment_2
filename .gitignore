@@ -216,3 +216,4 @@ wandb/
 
 ## .pt weight files 
 *.pt
+*.pth

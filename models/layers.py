@@ -1,28 +1,8 @@
-"""
-Custom layers: CustomDropout and IoULoss.
-Both inherit from nn.Module as required by the autograder.
-"""
-
 import torch
 import torch.nn as nn
 
 
 class CustomDropout(nn.Module):
-    """
-    Custom Dropout implementation using inverted dropout scaling.
-
-    During training:
-      - A binary mask is sampled where each element is 1 with prob (1-p).
-      - The output is scaled by 1/(1-p) so the expected magnitude is
-        preserved and no scaling is needed at inference time.
-
-    During eval (self.training == False):
-      - The input is returned unchanged.
-
-    Args:
-        p (float): probability of an element being zeroed. Default: 0.5
-    """
-
     def __init__(self, p: float = 0.5):
         super().__init__()
         if not (0.0 <= p < 1.0):
@@ -42,14 +22,6 @@ class CustomDropout(nn.Module):
 
 
 class IoULoss(nn.Module):
-    """
-    Intersection over Union loss for bounding box regression.
-
-    Args:
-        reduction (str): 'mean' | 'sum' | 'none'. Default: 'mean'
-        eps (float): numerical stability constant.
-    """
-
     def __init__(self, reduction: str = 'mean', eps: float = 1e-6):
         super().__init__()
         if reduction not in ('mean', 'sum', 'none'):

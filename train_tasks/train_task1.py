@@ -1,15 +1,3 @@
-"""
-train_task1.py  —  VGG11 Classification (Task 1)
-
-Usage:
-    python train_task1.py --data_root /path/to/oxford_pets \
-                          --epochs 30 --batch_size 32 --lr 1e-3 \
-                          --wandb_project da6401_a2
-
-Also trains the BN-ablation and Dropout-ablation variants required for
-W&B report sections 2.1 and 2.2.
-"""
-
 import argparse
 import torch
 import torch.nn as nn
