@@ -33,7 +33,7 @@ which matches the normalised [cx, cy, w, h] coordinate space.
 
 import torch
 import torch.nn as nn
-from .vgg11 import VGG11Encoder
+from .vgg11 import VGG11Encoder, VGG11
 
 
 class LocalizationModel(nn.Module):
@@ -45,7 +45,7 @@ class LocalizationModel(nn.Module):
         freeze_backbone (bool): If True, backbone weights are frozen.
     """
 
-    def __init__(self, vgg11: VGG11Encoder, freeze_backbone: bool = True):
+    def __init__(self, vgg11: VGG11, freeze_backbone: bool = True):
         super().__init__()
 
         self.backbone = vgg11.get_backbone()          # nn.Sequential of conv blocks

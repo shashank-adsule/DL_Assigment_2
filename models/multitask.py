@@ -227,3 +227,8 @@ class MultiTaskLoss(nn.Module):
             + self.lambda_seg * loss_seg
         )
         return total, {"cls": loss_cls.item(), "loc": loss_loc.item(), "seg": loss_seg.item()}
+
+
+# Autograder imports this exact name:
+#   from models.multitask import MultiTaskPerceptionModel
+MultiTaskPerceptionModel = MultiTaskVGG11

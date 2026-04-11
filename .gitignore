@@ -208,3 +208,11 @@ __marimo__/
 
 ## temp
 temp/
+temp.*
+
+
+## wandb
+wandb/
+
+## .pt weight files 
+*.pt

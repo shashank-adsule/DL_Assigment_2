@@ -16,6 +16,8 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
+torch.backends.cudnn.benchmark = True
+
 import wandb
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -61,7 +63,7 @@ def train_vgg11(args, use_bn: bool = True, dropout_p: float = 0.5,
         batch_size=args.batch_size, num_workers=args.num_workers
     )
 
-    model = VGG11Encoder(num_classes=37, dropout_p=dropout_p)
+    model = VGG11Encoder(num_classes=37, dropout_p=dropout_p).to(device)
 
     if not use_bn:
         # Remove BatchNorm layers for ablation study
@@ -109,14 +111,19 @@ def train_vgg11(args, use_bn: bool = True, dropout_p: float = 0.5,
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root",      required=True)
+    # parser.add_argument("--data_root",      required=True)
+    parser.add_argument("--data_root",      default=r"D:\code\repo\DL_Assigment_2\temp")
     parser.add_argument("--epochs",         type=int,   default=30)
-    parser.add_argument("--batch_size",     type=int,   default=32)
+    parser.add_argument("--batch_size",     type=int,   default=[32,64][0])
     parser.add_argument("--lr",             type=float, default=1e-3)
     parser.add_argument("--num_workers",    type=int,   default=4)
     parser.add_argument("--save_dir",       default="outputs")
     parser.add_argument("--wandb_project",  default="da6401_a2")
     parser.add_argument("--ablation",       action="store_true",
+                        
+
+
+
                         help="Also run BN and Dropout ablation variants")
     args = parser.parse_args()
 

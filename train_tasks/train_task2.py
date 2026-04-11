@@ -18,7 +18,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import wandb
 
 from models import VGG11Encoder, LocalizationModel, IoULoss
-from data   import get_dataloaders
+from data.dataset   import get_dataloaders
 from utils  import (Trainer, compute_iou_batch, compute_map,
                     init_wandb, log_images_bbox)
 
@@ -53,8 +53,8 @@ def loc_metric_fn(all_outputs, all_batches):
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root",      required=True)
-    parser.add_argument("--vgg11_ckpt",     required=True,
+    parser.add_argument("--data_root",      default=r"D:\code\repo\DL_Assigment_2\temp")
+    parser.add_argument("--vgg11_ckpt",     default=r"D:\code\repo\DL_Assigment_2\outputs\vgg11_bn1_dp0.5_best.pt",
                         help="Path to best Task-1 checkpoint (.pt)")
     parser.add_argument("--freeze_backbone",action="store_true", default=True)
     parser.add_argument("--epochs",         type=int,   default=20)
@@ -73,7 +73,7 @@ def main():
                config=vars(args))
 
     # Load pretrained VGG11
-    vgg11 = VGG11(num_classes=37)
+    vgg11 = VGG11Encoder(num_classes=37)
     ckpt  = torch.load(args.vgg11_ckpt, map_location="cpu")
     vgg11.load_state_dict(ckpt["model"])
     print(f"Loaded VGG11 from {args.vgg11_ckpt} (epoch {ckpt['epoch']})")

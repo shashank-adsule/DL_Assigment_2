@@ -21,7 +21,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import wandb
 
-from models import UNetVGG11, DiceCELoss, VGG11
+from models import UNetVGG11, DiceCELoss, VGG11Encoder
 from data   import get_dataloaders
 from utils  import (Trainer, compute_dice, compute_pixel_acc,
                     init_wandb, log_seg_samples)
@@ -170,8 +170,8 @@ def train_strategy(args, strategy: str):
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root",     required=True)
-    parser.add_argument("--vgg11_ckpt",    required=True)
+    parser.add_argument("--data_root",      default=r"D:\code\repo\DL_Assigment_2\temp")
+    parser.add_argument("--vgg11_ckpt",     default=r"D:\code\repo\DL_Assigment_2\outputs\vgg11_bn1_dp0.5_best.pt")
     parser.add_argument("--strategy",      default="all",
                         choices=["frozen", "partial", "full", "all"])
     parser.add_argument("--epochs",        type=int,   default=25)
