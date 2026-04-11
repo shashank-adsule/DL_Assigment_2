@@ -1,41 +1,3 @@
-"""
-Task 3: U-Net Style Semantic Segmentation.
-
-Architecture
-------------
-Encoder  : VGG11 convolutional backbone split into 5 blocks.
-           Skip connections are extracted after each block's ReLU,
-           before MaxPool, so spatial resolution is retained.
-
-Decoder  : Symmetric expansive path using ConvTranspose2d for learnable
-           upsampling (bilinear interpolation is NOT used per spec).
-           At each decoder stage the upsampled feature map is concatenated
-           with the spatially-aligned encoder skip map (U-Net fusion).
-
-Output   : Per-pixel logits over 3 classes (foreground / background / border)
-           matching the Oxford Pet trimap annotation format.
-
-Loss function choice
---------------------
-Combined Dice + CrossEntropy loss.
-
-Justification:
-  - CrossEntropy provides strong per-pixel gradient signal everywhere and
-    is well-calibrated during early training.
-  - Dice loss optimises directly for the overlap metric used in evaluation
-    and is robust to class imbalance (the background class dominates the
-    trimap pixel count).
-  - Their combination stabilises training: CE warms up quickly, Dice
-    refines the segmentation boundary.
-
-Upsampling justification
-------------------------
-ConvTranspose2d (transposed/fractional convolution) learns its own
-upsampling kernel and is back-propagable end-to-end. This allows the
-decoder to learn task-specific upsampling — e.g. preserving sharp
-object edges — rather than using a fixed interpolation algorithm.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -64,15 +26,6 @@ class DoubleConv(nn.Module):
 # Combined Dice + CrossEntropy loss
 # ---------------------------------------------------------------------------
 class DiceCELoss(nn.Module):
-    """
-    Combined Dice + Cross-Entropy loss for multi-class segmentation.
-
-    Args:
-        num_classes (int): number of output classes
-        dice_weight (float): weight applied to the Dice component
-        ce_weight   (float): weight applied to the CE component
-        eps         (float): Dice smoothing constant
-    """
 
     def __init__(self, num_classes=3, dice_weight=0.5, ce_weight=0.5, eps=1e-6):
         super().__init__()
@@ -83,11 +36,6 @@ class DiceCELoss(nn.Module):
         self.ce           = nn.CrossEntropyLoss()
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            logits  (Tensor): (B, C, H, W) — raw unnormalised scores
-            targets (Tensor): (B, H, W)    — integer class indices
-        """
         ce_loss = self.ce(logits, targets)
 
         # Dice over softmax probabilities
@@ -108,19 +56,6 @@ class DiceCELoss(nn.Module):
 # U-Net segmentation model
 # ---------------------------------------------------------------------------
 class UNetVGG11(nn.Module):
-    """
-    U-Net with VGG11 encoder.
-
-    The VGG11 features Sequential is split manually into 5 encoder blocks
-    so we can extract skip-connection tensors at each stage.
-
-    Encoder channel progression : 64 → 128 → 256 → 512 → 512
-    Decoder channel progression : mirrors encoder in reverse.
-
-    Args:
-        num_classes     (int):  number of segmentation classes (default 3)
-        freeze_encoder  (bool): if True, encoder weights are not updated
-    """
 
     def __init__(self, num_classes: int = 3, freeze_encoder: bool = False):
         super().__init__()
@@ -186,10 +121,6 @@ class UNetVGG11(nn.Module):
                     param.requires_grad = False
 
     def load_encoder_from_vgg11(self, vgg11_state_dict: dict):
-        """
-        Initialise encoder weights from a trained VGG11 state dict.
-        Keys are remapped from vgg11.features.* to enc*.* naming.
-        """
         # Map: features index → encoder block attribute
         # VGG11.features indices: see vgg11.py
         block_map = {
@@ -216,12 +147,6 @@ class UNetVGG11(nn.Module):
             block.load_state_dict(sub_keys, strict=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x (Tensor): (B, 3, H, W)
-        Returns:
-            logits (Tensor): (B, num_classes, H, W)
-        """
         # ---- Encoder + skip connections ----
         s1 = self.enc1(x)       # (B, 64,  H,   W)
         s2 = self.enc2(self.pool1(s1))   # (B, 128, H/2, W/2)

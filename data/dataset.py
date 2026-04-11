@@ -1,25 +1,3 @@
-"""
-Oxford-IIIT Pet Dataset loader.
-
-Provides three datasets:
-  PetClassificationDataset  — image + breed label (Task 1)
-  PetLocalizationDataset    — image + normalised bbox (Task 2)
-  PetSegmentationDataset    — image + trimap mask (Task 3)
-  PetMultiTaskDataset       — image + all three targets (Task 4)
-
-The dataset splits are determined by the official trainval.txt / test.txt
-annotation files. A random 90/10 train/val split is applied to trainval.txt.
-
-Bounding boxes from the annotation XML files are normalised to [0,1] and
-converted to [cx, cy, w, h] format to match the model output space.
-
-Trimap masks use the original encoding:
-  1 = foreground pet
-  2 = background
-  3 = boundary / uncertain
-We remap to 0-indexed classes: foreground=0, background=1, boundary=2.
-"""
-
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -117,13 +95,6 @@ def _parse_bbox(xml_path: Path, img_w: int, img_h: int) -> Optional[torch.Tensor
 # Task 1: Classification Dataset
 # ---------------------------------------------------------------------------
 class PetClassificationDataset(Dataset):
-    """
-    Args:
-        root        : path to the Oxford-IIIT Pet dataset root
-        split       : "trainval" or "test"
-        transform   : image transform (defaults to get_image_transforms)
-    """
-
     def __init__(self, root: str, split: str = "trainval", transform=None):
         self.root     = Path(root)
         self.img_dir  = self.root / "images"
@@ -279,12 +250,6 @@ def get_dataloaders(
     num_workers: int = 4,
     seed: int = 42,
 ):
-    """
-    Returns (train_loader, val_loader, test_loader).
-
-    Train/val are derived from trainval.txt using `val_split` fraction.
-    Test is derived from test.txt.
-    """
     dataset_cls = {
         "classification": PetClassificationDataset,
         "localization":   PetLocalizationDataset,

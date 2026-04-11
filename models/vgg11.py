@@ -1,47 +1,8 @@
-"""
-VGG11 backbone with BatchNorm and CustomDropout.
-
-Architectural decisions
------------------------
-BatchNorm placement  : after Conv2d, before ReLU.
-  Reason: normalising pre-activation values prevents the ReLU from receiving
-  inputs with arbitrarily large scale, which would cause dead neurons or
-  saturated activations and slow convergence.
-
-Dropout placement    : only in the fully-connected classifier head, NOT in
-  convolutional blocks.
-  Reason 1 – spatial correlation: adjacent pixels in a feature map are highly
-  correlated, so dropping individual values gives weak regularisation compared
-  to dropping in FC layers where each unit carries independent information.
-  Reason 2 – reuse: the convolutional backbone is reused as an encoder in
-  Tasks 2, 3, and 4. Keeping it dropout-free produces more stable feature
-  representations for downstream heads.
-
-Dropout after ReLU in FC layers: we mask neurons that are already active
-  (positive), which is a stronger signal than masking pre-activation values.
-"""
-
 import torch
 import torch.nn as nn
 from .layers import CustomDropout
 
-
 class VGG11Encoder(nn.Module):
-    """
-    VGG11 with BatchNorm, from scratch.
-
-    The convolutional feature extractor follows the standard VGG11 topology:
-      Block 1: 1 conv,  64 channels
-      Block 2: 1 conv, 128 channels
-      Block 3: 2 convs, 256 channels
-      Block 4: 2 convs, 512 channels
-      Block 5: 2 convs, 512 channels
-    Each block ends with MaxPool2d(2, 2).
-
-    Input  : (B, 3, 224, 224)
-    Output : (B, num_classes) logits
-    """
-
     def __init__(self, num_classes: int = 37, dropout_p: float = 0.5):
         super().__init__()
 
@@ -124,7 +85,6 @@ class VGG11Encoder(nn.Module):
         return x
 
     def get_backbone(self) -> nn.Sequential:
-        """Return only the convolutional feature extractor (for Task 2 & 3)."""
         return self.features
 
 

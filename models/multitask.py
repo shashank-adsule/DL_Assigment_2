@@ -1,23 +1,3 @@
-"""
-Task 4: Unified Multi-Task Learning Pipeline.
-
-A single model with:
-  - Shared VGG11 convolutional backbone
-  - Three task-specific heads branching from the backbone:
-      1. Classification head  → 37-class logits
-      2. Localization head    → [cx, cy, w, h] bounding box
-      3. Segmentation decoder → per-pixel class map (trimap)
-
-Single forward pass yields all three outputs simultaneously.
-
-Multi-task loss
----------------
-Total loss = λ_cls * CE_loss + λ_loc * IoU_loss + λ_seg * DiceCE_loss
-
-The λ weights default to equal (1/3 each). They can be tuned as
-hyperparameters if one task dominates during training.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,14 +7,6 @@ from .segmentation import DoubleConv, DiceCELoss
 
 
 class MultiTaskVGG11(nn.Module):
-    """
-    Unified multi-task model built on a shared VGG11 encoder.
-
-    Args:
-        num_classes   (int): number of breed classes (default 37)
-        num_seg_classes (int): segmentation classes (default 3 for trimap)
-        dropout_p     (float): dropout prob in classification head
-    """
 
     def __init__(
         self,
@@ -142,18 +114,6 @@ class MultiTaskVGG11(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def forward(self, x: torch.Tensor) -> dict:
-        """
-        Single forward pass returning all three task outputs as a dict.
-
-        Args:
-            x (Tensor): (B, 3, H, W)
-
-        Returns:
-            dict with keys:
-              'classification' : Tensor (B, num_classes)       — raw logits
-              'localization'   : Tensor (B, 4)                 — [cx, cy, w, h] in [0,1]
-              'segmentation'   : Tensor (B, num_seg_classes, H, W)
-        """
         # ---- Shared encoder ----
         s1 = self.enc1(x)
         s2 = self.enc2(self.pool1(s1))
@@ -189,14 +149,6 @@ class MultiTaskVGG11(nn.Module):
 # Multi-task loss
 # ---------------------------------------------------------------------------
 class MultiTaskLoss(nn.Module):
-    """
-    Weighted sum of the three task losses.
-
-    Args:
-        lambda_cls (float): weight for classification CE loss
-        lambda_loc (float): weight for IoU localization loss
-        lambda_seg (float): weight for Dice+CE segmentation loss
-    """
 
     def __init__(
         self,

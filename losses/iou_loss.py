@@ -1,24 +1,8 @@
-"""
-losses/iou_loss.py
-
-Autograder instantiates as: IoULoss(reduction='mean')
-Boxes are in [x_center, y_center, width, height] format, normalised to [0, 1].
-Loss = 1 - IoU, reduced over the batch according to `reduction`.
-"""
-
 import torch
 import torch.nn as nn
 
 
 class IoULoss(nn.Module):
-    """
-    Intersection over Union loss for bounding box regression.
-
-    Args:
-        reduction (str): 'mean' | 'sum' | 'none'  — matches PyTorch convention.
-                         Default: 'mean'
-        eps (float): small value added to denominator for numerical stability.
-    """
 
     def __init__(self, reduction: str = 'mean', eps: float = 1e-6):
         super().__init__()
@@ -28,14 +12,6 @@ class IoULoss(nn.Module):
         self.eps = eps
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            pred   (Tensor): (B, 4) — predicted   [cx, cy, w, h] in [0, 1]
-            target (Tensor): (B, 4) — ground truth [cx, cy, w, h] in [0, 1]
-
-        Returns:
-            Scalar loss (or per-sample tensor if reduction='none').
-        """
         # ---- Convert cx/cy/w/h  →  x1/y1/x2/y2 ----
         pred_x1 = pred[:, 0] - pred[:, 2] / 2
         pred_y1 = pred[:, 1] - pred[:, 3] / 2
