@@ -1,3 +1,23 @@
+"""
+models/multitask.py
+--------------------
+Unified multi-task model (Task 4).
+
+Why three separate encoders?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Each task head was trained against features from its OWN dedicated
+VGG-11 backbone. Using a single shared encoder at inference time
+causes the heads whose encoder is replaced to receive a completely
+different feature distribution from training, collapsing their metrics.
+
+Three independent encoders — each loaded from its own checkpoint —
+ensures every head always sees the feature statistics it was optimised
+on, while a single forward() satisfies the assignment API.
+
+Autograder import:
+    from models.multitask import MultiTaskPerceptionModel
+"""
+
 import os
 
 import torch
@@ -47,11 +67,11 @@ class MultiTaskPerceptionModel(nn.Module):
         # ----------------------------------------------------------------
         import gdown
         os.makedirs(os.path.dirname(cls_ckpt) or ".", exist_ok=True)
-        gdown.download(id="REPLACE_WITH_CLASSIFIER_DRIVE_ID",
+        gdown.download(id="10PkzOaIfSnLNwx-j5i4RYXU1vH9bfljd",
                        output=cls_ckpt, quiet=False)
-        gdown.download(id="REPLACE_WITH_LOCALIZER_DRIVE_ID",
+        gdown.download(id="1baPZLEV-3ZK9Hcm1ovpSIsKOVX7C2Nkf",
                        output=loc_ckpt, quiet=False)
-        gdown.download(id="REPLACE_WITH_UNET_DRIVE_ID",
+        gdown.download(id="1yPqyIgdMd9ntg3EZ1k34kY0y08ocyxcq",
                        output=seg_ckpt, quiet=False)
 
         super().__init__()
