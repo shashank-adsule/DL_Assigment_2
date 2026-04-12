@@ -22,6 +22,11 @@ def _strip_prefix(sd: dict, prefix: str) -> dict:
 
 
 class MultiTaskPerceptionModel(nn.Module):
+    """
+    Single forward-pass model returning classification, localisation,
+    and segmentation outputs simultaneously.
+    """
+
     def __init__(
         self,
         num_breeds:  int = 37,
@@ -31,16 +36,23 @@ class MultiTaskPerceptionModel(nn.Module):
         loc_ckpt: str = os.path.join(_CKPT_DIR, "localizer.pth"),
         seg_ckpt: str = os.path.join(_CKPT_DIR, "unet.pth"),
     ):
-        try:
-            import gdown
-            gdown.download(id="1Us7ddjdy_r8ZSNpz9ON1d7woc9hn9hr5",
-                           output=cls_ckpt, quiet=False)
-            gdown.download(id="16sLO2Stq9rkLTp0m6tH3cf26-kSnT4ig",
-                           output=loc_ckpt, quiet=False)
-            gdown.download(id="1nbuevJc7pYq4PfWgU1ymiiffyayn9Upr",
-                           output=seg_ckpt, quiet=False)
-        except Exception as e:
-            print(f"  [MultiTask] gdown warning: {e}")
+        # ----------------------------------------------------------------
+        # Step 3 from submission guidelines:
+        # Replace the placeholder IDs below with your actual Google Drive
+        # file IDs after uploading your checkpoints.
+        #
+        # How to get the ID:
+        #   Drive link → https://drive.google.com/file/d/<ID>/view?usp=sharing
+        #   Copy only the <ID> part and paste it below.
+        # ----------------------------------------------------------------
+        import gdown
+        os.makedirs(os.path.dirname(cls_ckpt) or ".", exist_ok=True)
+        gdown.download(id="REPLACE_WITH_CLASSIFIER_DRIVE_ID",
+                       output=cls_ckpt, quiet=False)
+        gdown.download(id="REPLACE_WITH_LOCALIZER_DRIVE_ID",
+                       output=loc_ckpt, quiet=False)
+        gdown.download(id="REPLACE_WITH_UNET_DRIVE_ID",
+                       output=seg_ckpt, quiet=False)
 
         super().__init__()
 
@@ -111,6 +123,16 @@ class MultiTaskPerceptionModel(nn.Module):
 
     # ------------------------------------------------------------------
     def forward(self, x: torch.Tensor) -> dict:
+        """
+        Single forward pass.
+
+        Returns:
+            {
+              'classification': [B, num_breeds]          class logits
+              'localization'  : [B, 4]                   (cx,cy,w,h) pixels
+              'segmentation'  : [B, seg_classes, H, W]
+            }
+        """
         # Classification branch
         cls_out = self.cls_head(self.enc_cls(x, return_features=False))
 
@@ -134,5 +156,5 @@ class MultiTaskPerceptionModel(nn.Module):
         }
 
 
-# ---- Keep your old class name as an alias ----
+# Alias kept for compatibility
 MultiTaskVGG11 = MultiTaskPerceptionModel

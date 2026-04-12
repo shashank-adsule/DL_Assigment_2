@@ -6,30 +6,30 @@ os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 warnings.filterwarnings("ignore", category=UserWarning, module="albumentations")
 from pathlib import Path
 from typing import List, Optional
-
+ 
 import numpy as np
 from PIL import Image
-
+ 
 import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
-
+ 
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 _IMG_SIZE = 224
 _MEAN = (0.485, 0.456, 0.406)
 _STD  = (0.229, 0.224, 0.225)
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Augmentation pipelines
 # ---------------------------------------------------------------------------
-
+ 
 def get_train_transforms() -> A.Compose:
     return A.Compose(
         [
@@ -64,8 +64,8 @@ def get_train_transforms() -> A.Compose:
             min_visibility=0.2,
         ),
     )
-
-
+ 
+ 
 def get_val_transforms() -> A.Compose:
     return A.Compose(
         [
@@ -79,13 +79,23 @@ def get_val_transforms() -> A.Compose:
             min_visibility=0.1,
         ),
     )
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
-
+ 
 class OxfordPetDataset(Dataset):
+    """
+    Args:
+        root:      Root directory (contains images/ and annotations/).
+        partition: 'train' | 'val' | 'test'.
+        mode:      'cls' | 'loc' | 'seg' | 'all'.
+        pipeline:  Override the default augmentation pipeline.
+        test_frac: Fraction held out for test. Default 0.10.
+        val_frac:  Fraction of remaining data used for val. Default 0.10.
+    """
+ 
     def __init__(
         self,
         root: str,
@@ -102,13 +112,13 @@ class OxfordPetDataset(Dataset):
         self.ann_dir    = self.root / "annotations"
         self.trimap_dir = self.ann_dir / "trimaps"
         self.xml_dir    = self.ann_dir / "xmls"
-
+ 
         self.pipeline = (pipeline if pipeline is not None
                          else (get_train_transforms() if partition == "train"
                                else get_val_transforms()))
-
+ 
         self.records = self._prepare_records(test_frac, val_frac)
-
+ 
     # ------------------------------------------------------------------
     def _read_list(self) -> List[dict]:
         entries = []
@@ -120,7 +130,7 @@ class OxfordPetDataset(Dataset):
                 parts = line.split()
                 entries.append({"name": parts[0], "label": int(parts[1]) - 1})
         return entries
-
+ 
     def _split(self, entries, test_frac, val_frac):
         names  = [e["name"]  for e in entries]
         labels = [e["label"] for e in entries]
@@ -133,12 +143,12 @@ class OxfordPetDataset(Dataset):
             stratify=tr_l, random_state=42,
         )
         return set(tr_n), set(va_n), set(te_n)
-
+ 
     def _prepare_records(self, test_frac, val_frac) -> List[dict]:
         all_entries = self._read_list()
         tr_s, va_s, te_s = self._split(all_entries, test_frac, val_frac)
         sel = {"train": tr_s, "val": va_s, "test": te_s}[self.partition]
-
+ 
         records = []
         for e in all_entries:
             name = e["name"]
@@ -161,11 +171,11 @@ class OxfordPetDataset(Dataset):
                 "name": name, "label": e["label"],
                 "has_mask": has_mask, "has_xml": has_xml,
             })
-
+ 
         print(f"[Dataset] partition={self.partition} mode={self.mode} "
               f"samples={len(records)}")
         return records
-
+ 
     # ------------------------------------------------------------------
     def _read_trimap(self, name: str) -> Optional[np.ndarray]:
         path = self.trimap_dir / f"{name}.png"
@@ -173,7 +183,7 @@ class OxfordPetDataset(Dataset):
             return None
         raw = np.array(Image.open(path), dtype=np.int32)
         return (raw - 1).clip(0, 2).astype(np.uint8)   # {1,2,3} → {0,1,2}
-
+ 
     def _read_bbox_xyxy(self, name: str) -> Optional[List[float]]:
         path = self.xml_dir / f"{name}.xml"
         if not path.exists():
@@ -189,29 +199,29 @@ class OxfordPetDataset(Dataset):
             float(box.find("xmax").text),
             float(box.find("ymax").text),
         ]
-
+ 
     # ------------------------------------------------------------------
     def __len__(self) -> int:
         return len(self.records)
-
+ 
     def __getitem__(self, idx: int) -> dict:
         rec  = self.records[idx]
         name = rec["name"]
-
+ 
         image  = np.array(Image.open(self.img_dir / f"{name}.jpg").convert("RGB"))
         trimap = self._read_trimap(name)
         if trimap is None:
             trimap = np.zeros(image.shape[:2], dtype=np.uint8)
-
+ 
         raw_bbox = self._read_bbox_xyxy(name)
         bboxes      = [raw_bbox] if raw_bbox is not None else []
         bbox_labels = [0]        if raw_bbox is not None else []
-
+ 
         aug         = self.pipeline(image=image, mask=trimap,
                                     bboxes=bboxes, bbox_labels=bbox_labels)
         img_tensor  = aug["image"]
         mask_tensor = aug["mask"].long()
-
+ 
         if aug["bboxes"]:
             x1, y1, x2, y2 = aug["bboxes"][0]
             bbox_tensor = torch.tensor([x1, y1, x2, y2], dtype=torch.float32)
@@ -219,7 +229,7 @@ class OxfordPetDataset(Dataset):
         else:
             bbox_tensor = torch.zeros(4, dtype=torch.float32)
             bbox_valid  = torch.tensor(0.0)
-
+ 
         return {
             "image":     img_tensor,
             "label":     torch.tensor(rec["label"], dtype=torch.long),
@@ -228,17 +238,17 @@ class OxfordPetDataset(Dataset):
             "bbox_mask": bbox_valid,
             "name":      name,
         }
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # Collate
 # ---------------------------------------------------------------------------
-
+ 
 def collate_fn(batch: List[dict]) -> dict:
     images = torch.stack([s["image"] for s in batch])
     labels = torch.stack([s["label"] for s in batch])
     H, W   = images.shape[2:]
-
+ 
     masks = torch.stack([
         s["mask"] if s["mask"] is not None
         else torch.full((H, W), -1, dtype=torch.long)
@@ -246,7 +256,7 @@ def collate_fn(batch: List[dict]) -> dict:
     ])
     bboxes     = torch.stack([s["bbox"]      for s in batch])
     bbox_masks = torch.stack([s["bbox_mask"] for s in batch])
-
+ 
     return {
         "image":     images,
         "label":     labels,
@@ -254,10 +264,12 @@ def collate_fn(batch: List[dict]) -> dict:
         "bbox":      bboxes,
         "bbox_mask": bbox_masks,
     }
+ 
+ 
 # ---------------------------------------------------------------------------
 # Convenience loader builder (kept for backward compat with train_tasks/)
 # ---------------------------------------------------------------------------
-
+ 
 def get_dataloaders(
     root: str,
     task: str = "cls",
@@ -268,14 +280,14 @@ def get_dataloaders(
 ):
     """
     Returns (train_loader, val_loader, test_loader).
-
+ 
     task: 'cls' | 'loc' | 'seg' | 'all'
     """
     kw = dict(root=root, mode=task, test_frac=test_frac, val_frac=val_frac)
     tr = OxfordPetDataset(**kw, partition="train")
     va = OxfordPetDataset(**kw, partition="val")
     te = OxfordPetDataset(**kw, partition="test")
-
+ 
     loader_kw = dict(batch_size=batch_size, num_workers=num_workers,
                      pin_memory=True, collate_fn=collate_fn)
     return (
@@ -283,7 +295,8 @@ def get_dataloaders(
         DataLoader(va, shuffle=False, **loader_kw),
         DataLoader(te, shuffle=False, **loader_kw),
     )
-
+ 
+ 
 # Aliases
 OxfordIIITPetDataset = OxfordPetDataset
 PetDataset           = OxfordPetDataset
