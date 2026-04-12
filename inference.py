@@ -117,7 +117,7 @@ def evaluate(args) -> None:
 # ---------------------------------------------------------------------------
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_root",   required=True)
+    p.add_argument("--data_root",   default=r"D:\code\repo\DL_Assigment_2\temp")
     p.add_argument("--ckpt_dir",    default="checkpoints")
     p.add_argument("--batch_size",  type=int, default=32)
     args = p.parse_args()

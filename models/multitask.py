@@ -33,7 +33,7 @@ _CKPT_DIR = "checkpoints"
 
 
 def _read_ckpt(path: str) -> dict:
-    raw = torch.load(path, map_location="cpu")
+    raw = torch.load(path, map_location="cpu", weights_only=False)
     return raw.get("state_dict", raw)
 
 

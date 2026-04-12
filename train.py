@@ -476,7 +476,7 @@ def train_localization(args) -> None:
     # Warm-start encoder from classifier checkpoint
     clf_ckpt = Path(args.ckpt_dir) / "classifier.pth"
     if clf_ckpt.exists():
-        ckpt   = torch.load(clf_ckpt, map_location="cpu")
+        ckpt   = torch.load(clf_ckpt, map_location="cpu", weights_only=False)
         sd     = ckpt.get("state_dict", ckpt)
         enc_sd = {k[len("encoder."):]: v for k, v in sd.items()
                   if k.startswith("encoder.")}
@@ -716,7 +716,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="DA6401 Assignment-2 Training")
     p.add_argument("--task",
                    choices=["classification", "localization", "segmentation"],
-                   default="classification")
+                   default="segmentation")
     p.add_argument("--data_dir",          default=r"D:\code\repo\DL_Assigment_2\temp",
                    help="Root of the Oxford-IIIT Pet dataset")
     p.add_argument("--ckpt_dir",          default="checkpoints")
@@ -742,40 +742,22 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
+    if args.task == "classification":
+        train_classification(args)
 
-    # train_classification(args)
+        if args.ablation:
+            # Section 2.1 — no BatchNorm
+            train_classification_variant(args, use_bn=False,
+                                         dropout_p=0.5, run_suffix="_nobn")
+            # Section 2.2 — dropout p=0.2
+            train_classification_variant(args, use_bn=True,
+                                         dropout_p=0.2, run_suffix="_dp02")
+            # Section 2.2 — no dropout
+            train_classification_variant(args, use_bn=True,
+                                         dropout_p=0.0, run_suffix="_nodp")
 
-    # if args.ablation:
-    #     # Section 2.1 — no BatchNorm
-    #     train_classification_variant(args, use_bn=False,
-    #                                     dropout_p=0.5, run_suffix="_nobn")
-    #     # Section 2.2 — dropout p=0.2
-    #     train_classification_variant(args, use_bn=True,
-    #                                     dropout_p=0.2, run_suffix="_dp02")
-    #     # Section 2.2 — no dropout
-    #     train_classification_variant(args, use_bn=True,
-    #                                     dropout_p=0.0, run_suffix="_nodp")
+    elif args.task == "localization":
+        train_localization(args)
 
-    # train_localization(args)
-
-    train_segmentation(args)
-
-    # if args.task == "classification":
-    #     train_classification(args)
-
-    #     if args.ablation:
-    #         # Section 2.1 — no BatchNorm
-    #         train_classification_variant(args, use_bn=False,
-    #                                      dropout_p=0.5, run_suffix="_nobn")
-    #         # Section 2.2 — dropout p=0.2
-    #         train_classification_variant(args, use_bn=True,
-    #                                      dropout_p=0.2, run_suffix="_dp02")
-    #         # Section 2.2 — no dropout
-    #         train_classification_variant(args, use_bn=True,
-    #                                      dropout_p=0.0, run_suffix="_nodp")
-
-    # elif args.task == "localization":
-    #     train_localization(args)
-
-    # elif args.task == "segmentation":
-    #     train_segmentation(args)
+    elif args.task == "segmentation":
+        train_segmentation(args)
