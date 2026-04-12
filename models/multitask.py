@@ -32,7 +32,7 @@ class MultiTaskPerceptionModel(nn.Module):
     ):
         import gdown
         os.makedirs(os.path.dirname(cls_ckpt) or ".", exist_ok=True)
-        gdown.download(id="10PkzOaIfSnLNwx-j5i4RYXU1vH9bfljd",
+        gdown.download(id="1djg_NhLniuFdrdVaGTWykEPIalAuLNvE",
                        output=cls_ckpt, quiet=False)
         gdown.download(id="1baPZLEV-3ZK9Hcm1ovpSIsKOVX7C2Nkf",
                        output=loc_ckpt, quiet=False)

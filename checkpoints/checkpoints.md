@@ -17,6 +17,6 @@ They are automatically downloaded from Google Drive when
 
 | File | Link |
 |------|------|
-| `classifier.pth` | https://drive.google.com/file/d/10PkzOaIfSnLNwx-j5i4RYXU1vH9bfljd/view?usp=sharing |
+| `classifier.pth` | https://drive.google.com/file/d/1djg_NhLniuFdrdVaGTWykEPIalAuLNvE/view?usp=sharing | 
 | `localizer.pth`  | https://drive.google.com/file/d/1baPZLEV-3ZK9Hcm1ovpSIsKOVX7C2Nkf/view?usp=sharing |
 | `unet.pth`       | https://drive.google.com/file/d/1yPqyIgdMd9ntg3EZ1k34kY0y08ocyxcq/view?usp=sharing |
