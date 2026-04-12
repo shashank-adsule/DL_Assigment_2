@@ -54,7 +54,6 @@ SEG_CLASS_NAMES = ["foreground", "background", "boundary"]
 # ---------------------------------------------------------------------------
 
 def xyxy_to_cxcywh(boxes: torch.Tensor) -> torch.Tensor:
-    """Convert (x1, y1, x2, y2) pixel boxes → (cx, cy, w, h) pixel boxes."""
     x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
     return torch.stack([
         (x1 + x2) / 2.0,
@@ -66,7 +65,6 @@ def xyxy_to_cxcywh(boxes: torch.Tensor) -> torch.Tensor:
 
 def batch_iou_cxcywh(pred: torch.Tensor, target: torch.Tensor,
                      eps: float = 1e-6) -> torch.Tensor:
-    """Per-sample IoU for (cx, cy, w, h) boxes."""
     def to_xyxy(b):
         cx, cy, w, h = b[:, 0], b[:, 1], b[:, 2], b[:, 3]
         return torch.stack([cx-w/2, cy-h/2, cx+w/2, cy+h/2], dim=1)
@@ -689,7 +687,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="DA6401 Assignment-2 Training")
     p.add_argument("--task",
                    choices=["classification", "localization", "segmentation"],
-                   default="classification")
+                   default="segmentation")
     p.add_argument("--data_dir",          default=r"D:\code\repo\DL_Assigment_2\temp",
                    help="Root of the Oxford-IIIT Pet dataset")
     p.add_argument("--ckpt_dir",          default="checkpoints")

@@ -1,6 +1,5 @@
 # DA6401 — Assignment 2: Visual Perception Pipeline
 
-> **Course:** DA6401 Introduction to Deep Learning — IIT Madras
 > **Dataset:** [Oxford-IIIT Pet Dataset](https://www.robots.ox.ac.uk/~vgg/data/pets/)
 
 ---
@@ -367,5 +366,3 @@ Not stored in this repo (excluded via `.gitignore`). Auto-downloaded by `MultiTa
 | `classifier.pth` | Classification | https://drive.google.com/file/d/10PkzOaIfSnLNwx-j5i4RYXU1vH9bfljd/view?usp=sharing |
 | `localizer.pth`  | Localisation  | https://drive.google.com/file/d/1baPZLEV-3ZK9Hcm1ovpSIsKOVX7C2Nkf/view?usp=sharing |
 | `unet.pth`       | Segmentation  | https://drive.google.com/file/d/1yPqyIgdMd9ntg3EZ1k34kY0y08ocyxcq/view?usp=sharing |
-
-> ⚠️ Do not delete the Drive folder until assignment marks are released.

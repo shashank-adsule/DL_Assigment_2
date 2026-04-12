@@ -268,11 +268,6 @@ def get_dataloaders(
     test_frac: float = 0.10,
     val_frac:  float = 0.10,
 ):
-    """
-    Returns (train_loader, val_loader, test_loader).
- 
-    task: 'cls' | 'loc' | 'seg' | 'all'
-    """
     kw = dict(root=root, mode=task, test_frac=test_frac, val_frac=val_frac)
     tr = OxfordPetDataset(**kw, partition="train")
     va = OxfordPetDataset(**kw, partition="val")

@@ -6,7 +6,6 @@ from .layers import CustomDropout
 
 _BOTTLENECK_DIM = 512 * 7 * 7   # 25088
 
-
 class BBoxHead(nn.Module):
     def __init__(self, dropout_p: float = 0.5):
         super().__init__()
@@ -47,10 +46,8 @@ class LocalizationModel(nn.Module):
                 p.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Returns [B, 4] — (cx, cy, w, h) in pixel space."""
         bottleneck = self.encoder(x, return_features=False)
         return self.head(bottleneck)
-
 
 # Keep old class name as alias so train_task2.py still imports it
 RegressionHead = BBoxHead

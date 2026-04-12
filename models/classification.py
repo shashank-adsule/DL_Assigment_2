@@ -6,7 +6,6 @@ from .layers import CustomDropout
 
 _BOTTLENECK_DIM = 512 * 7 * 7   # 25088
 
-
 class FCHead(nn.Module):
     def __init__(self, num_classes: int = 37, drop_rate: float = 0.5):
         super().__init__()
@@ -38,7 +37,6 @@ class FCHead(nn.Module):
 
 
 class PetClassifier(nn.Module):
-    """Full classifier: VGG11Encoder + FCHead."""
     def __init__(self, num_classes: int = 37, in_channels: int = 3,
                  drop_rate: float = 0.5):
         super().__init__()
@@ -48,7 +46,6 @@ class PetClassifier(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         neck = self.encoder(x, return_features=False)
         return self.head(neck)
-
 
 # Aliases
 ClassificationHead = FCHead
