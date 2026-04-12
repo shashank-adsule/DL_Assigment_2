@@ -86,16 +86,6 @@ def get_val_transforms() -> A.Compose:
 # ---------------------------------------------------------------------------
  
 class OxfordPetDataset(Dataset):
-    """
-    Args:
-        root:      Root directory (contains images/ and annotations/).
-        partition: 'train' | 'val' | 'test'.
-        mode:      'cls' | 'loc' | 'seg' | 'all'.
-        pipeline:  Override the default augmentation pipeline.
-        test_frac: Fraction held out for test. Default 0.10.
-        val_frac:  Fraction of remaining data used for val. Default 0.10.
-    """
- 
     def __init__(
         self,
         root: str,

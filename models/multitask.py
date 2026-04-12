@@ -11,7 +11,6 @@ from .layers         import CustomDropout
 
 _CKPT_DIR = "checkpoints"
 
-
 def _read_ckpt(path: str) -> dict:
     raw = torch.load(path, map_location="cpu", weights_only=False)
     return raw.get("state_dict", raw)
@@ -22,11 +21,6 @@ def _strip_prefix(sd: dict, prefix: str) -> dict:
 
 
 class MultiTaskPerceptionModel(nn.Module):
-    """
-    Single forward-pass model returning classification, localisation,
-    and segmentation outputs simultaneously.
-    """
-
     def __init__(
         self,
         num_breeds:  int = 37,
@@ -36,15 +30,6 @@ class MultiTaskPerceptionModel(nn.Module):
         loc_ckpt: str = os.path.join(_CKPT_DIR, "localizer.pth"),
         seg_ckpt: str = os.path.join(_CKPT_DIR, "unet.pth"),
     ):
-        # ----------------------------------------------------------------
-        # Step 3 from submission guidelines:
-        # Replace the placeholder IDs below with your actual Google Drive
-        # file IDs after uploading your checkpoints.
-        #
-        # How to get the ID:
-        #   Drive link → https://drive.google.com/file/d/<ID>/view?usp=sharing
-        #   Copy only the <ID> part and paste it below.
-        # ----------------------------------------------------------------
         import gdown
         os.makedirs(os.path.dirname(cls_ckpt) or ".", exist_ok=True)
         gdown.download(id="10PkzOaIfSnLNwx-j5i4RYXU1vH9bfljd",

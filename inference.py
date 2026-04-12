@@ -1,23 +1,9 @@
-"""
-inference.py
--------------
-Evaluate MultiTaskPerceptionModel on the test split.
-
-Metrics reported:
-  Classification : Macro F1-score (37 breeds)
-  Detection      : Mean IoU  (cx,cy,w,h pixel predictions vs gt)
-  Segmentation   : Macro Dice over valid trimap pixels
-
-Usage:
-    python inference.py --data_root /path/to/oxford_pets
-"""
 import os
 import sys
 import warnings
 # Suppress albumentations offline version-check warning (harmless network timeout)
 warnings.filterwarnings("ignore", category=UserWarning, module="albumentations")
 os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
-
 
 import argparse
 from pathlib import Path
@@ -31,7 +17,6 @@ from data.pets_dataset import OxfordPetDataset, collate_fn
 from models.multitask import MultiTaskPerceptionModel
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 # ---------------------------------------------------------------------------
 def boxes_to_corners(boxes: torch.Tensor) -> torch.Tensor:
@@ -112,7 +97,6 @@ def evaluate(args) -> None:
     print(f"  Detection       Mean IoU   :  {mean_iou:.4f}")
     print(f"  Segmentation    Dice Score :  {mean_dice:.4f}")
     print("=" * 52 + "\n")
-
 
 # ---------------------------------------------------------------------------
 def main():

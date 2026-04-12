@@ -10,7 +10,6 @@ _BOTTLENECK_DIM = 512 * 7 * 7   # 25088
 
 
 def _conv_bn_relu(in_ch: int, out_ch: int) -> nn.Sequential:
-    """3×3 conv → BN → ReLU block (padding=1 keeps spatial dims)."""
     return nn.Sequential(
         nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
         nn.BatchNorm2d(out_ch),

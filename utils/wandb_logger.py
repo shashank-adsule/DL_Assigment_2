@@ -1,15 +1,3 @@
-"""
-Weights & Biases logging utilities.
-
-Provides:
-  init_wandb          — initialise a W&B run with config dict
-  log_metrics         — log a dict of scalar metrics at a given step
-  log_images_bbox     — log a W&B table of images with bbox overlays (Task 2)
-  log_seg_samples     — log segmentation triples: image / GT / pred (Task 3)
-  log_feature_maps    — log feature map grids from a conv layer (Task 4 / report)
-  log_activation_hist — log activation histograms (BN ablation study)
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -38,9 +26,6 @@ def log_images_bbox(
     table_name: str = "bbox_predictions",
     n: int = 10,
 ):
-    """
-    Log a W&B table with image, predicted bbox (red), GT bbox (green), IoU.
-    """
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
     std  = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
 
@@ -123,10 +108,6 @@ def log_feature_maps(
     layer_indices: list = (0, -3),   # indices into model.features
     step: int = 0,
 ):
-    """
-    Extract and log feature maps from specific conv layers.
-    layer_indices: indices into model.features (negative = from end).
-    """
     activations = {}
 
     def make_hook(name):
@@ -160,9 +141,6 @@ def log_feature_maps(
 # ---------------------------------------------------------------------------
 def log_activation_hist(model: nn.Module, image: torch.Tensor,
                         target_layer_idx: int = 6, step: int = 0, tag: str = ""):
-    """
-    Log activation distribution at a specific layer (e.g. 3rd conv).
-    """
     activations = {}
 
     def hook(module, inp, out):

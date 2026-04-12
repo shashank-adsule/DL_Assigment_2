@@ -1,12 +1,3 @@
-"""
-Shared training engine.
-
-Provides:
-  train_one_epoch   — generic single-epoch training loop
-  evaluate          — generic evaluation loop
-  Trainer           — wraps model + optimiser + scheduler + W&B logging
-"""
-
 from __future__ import annotations
 
 import time
@@ -30,12 +21,6 @@ def train_one_epoch(
     epoch: int,
     log_interval: int = 20,
 ) -> Dict[str, float]:
-    """
-    Generic training loop. loss_fn must accept (model_output, batch) and
-    return a scalar loss tensor.
-
-    Returns dict of aggregated metrics.
-    """
     model.train()
     total_loss = 0.0
     n_batches  = 0
@@ -73,9 +58,6 @@ def evaluate(
     metric_fn: Callable,
     device: torch.device,
 ) -> Dict[str, float]:
-    """
-    Evaluation loop. metric_fn(all_outputs, all_batches) → dict of metrics.
-    """
     model.eval()
     total_loss = 0.0
     n_batches  = 0
@@ -100,23 +82,6 @@ def evaluate(
 # Trainer class
 # ---------------------------------------------------------------------------
 class Trainer:
-    """
-    High-level trainer that wraps the training / eval loops and handles
-    checkpointing and W&B logging.
-
-    Args:
-        model       : the nn.Module to train
-        train_loader: DataLoader for training set
-        val_loader  : DataLoader for validation set
-        optimizer   : torch optimiser
-        loss_fn     : callable(outputs, batch) → (loss, extras_dict)
-        metric_fn   : callable(all_outputs, all_batches) → dict
-        scheduler   : optional LR scheduler (step called after each epoch)
-        device      : torch.device
-        save_dir    : directory to save checkpoints
-        run_name    : string prefix for saved files
-    """
-
     def __init__(
         self,
         model: nn.Module,

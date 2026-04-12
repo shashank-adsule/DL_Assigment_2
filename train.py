@@ -693,7 +693,7 @@ def parse_args():
     p.add_argument("--data_dir",          default=r"D:\code\repo\DL_Assigment_2\temp",
                    help="Root of the Oxford-IIIT Pet dataset")
     p.add_argument("--ckpt_dir",          default="checkpoints")
-    p.add_argument("--epochs",            type=int,   default=60)
+    p.add_argument("--epochs",            type=int,   default=30)
     p.add_argument("--batch_size",        type=int,   default=32)
     p.add_argument("--lr",                type=float, default=5e-4)
     p.add_argument("--dropout_p",         type=float, default=0.5)

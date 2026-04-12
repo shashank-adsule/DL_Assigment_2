@@ -1,5 +1,6 @@
 # DA6401 — Assignment 2: Visual Perception Pipeline
 
+> **Course:** DA6401 Introduction to Deep Learning — IIT Madras
 > **Dataset:** [Oxford-IIIT Pet Dataset](https://www.robots.ox.ac.uk/~vgg/data/pets/)
 
 ---
@@ -29,24 +30,50 @@ A multi-stage visual perception pipeline that performs three tasks simultaneousl
 ```
 .
 ├── checkpoints/
-│   └── checkpoints.md          # Drive links; .pth files auto-downloaded on init
+│   ├── checkpoints.md              # Drive links; .pth files auto-downloaded on init
+│   ├── classifier.pth              # Task 1 checkpoint (auto-downloaded, not in repo)
+│   ├── localizer.pth               # Task 2 checkpoint (auto-downloaded, not in repo)
+│   └── unet.pth                    # Task 3 checkpoint (auto-downloaded, not in repo)
 ├── data/
-│   └── pets_dataset.py         # Dataset loader — albumentations, list.txt split
-├── inference.py                # Evaluate the unified pipeline on the test set
+│   ├── __init__.py
+│   └── dataset.py                  # Dataset loader — albumentations, list.txt split
 ├── losses/
 │   ├── __init__.py
-│   └── iou_loss.py             # Custom IoU loss (nn.Module, reduction kwarg)
+│   └── iou_loss.py                 # Custom IoU loss (nn.Module, reduction kwarg)
 ├── models/
 │   ├── __init__.py
-│   ├── classification.py       # FCHead + PetClassifier
-│   ├── layers.py               # CustomDropout (inverted scaling)
-│   ├── localization.py         # BBoxHead + LocalizationModel
-│   ├── multitask.py            # MultiTaskPerceptionModel
-│   ├── segmentation.py         # UpBlock + UNetVGG11 + DiceCELoss
-│   └── vgg11.py                # VGG11Encoder backbone
+│   ├── classification.py           # FCHead + PetClassifier
+│   ├── layers.py                   # CustomDropout (inverted scaling)
+│   ├── localization.py             # BBoxHead + LocalizationModel
+│   ├── multitask.py                # MultiTaskPerceptionModel
+│   ├── segmentation.py             # UpBlock + UNetVGG11 + DiceCELoss
+│   └── vgg11.py                    # VGG11Encoder backbone
+├── outputs/                        # Training outputs and logs
+├── train_tasks/                    # Individual task training scripts
+│   ├── train_task1.py
+│   ├── train_task2.py
+│   ├── train_task3.py
+│   └── train_task4.py
+├── utils/                          # Shared utilities
+│   ├── __init__.py
+│   ├── metrics.py                  # Evaluation metrics (F1, IoU, Dice)
+│   ├── trainer.py                  # Generic training loop helper
+│   └── wandb_logger.py             # W&B logging helpers
+├── wandb_test/                     # W&B report scripts (sections 2.1 – 2.8)
+│   ├── report_2_1_batchnorm_effect.py
+│   ├── report_2_2_dropout_dynamics.py
+│   ├── report_2_3_transfer_learning.py
+│   ├── report_2_4_feature_maps.py
+│   ├── report_2_5_detection_table.py
+│   ├── report_2_6_segmentation_eval.py
+│   ├── report_2_7_pipeline_showcase.py
+│   └── report_2_8_meta_analysis.py
+├── .gitignore
+├── inference.py                    # Evaluate unified pipeline on test set
 ├── README.md
 ├── requirements.txt
-└── train.py                    # Single entry point for all three tasks
+├── temp.ipynb                      # Exploration notebook
+└── train.py                        # Single entry point for all three tasks
 ```
 
 ---
@@ -73,7 +100,7 @@ pip install -r requirements.txt
 
 ### Dataset
 
-Download the Oxford-IIIT Pet Dataset and extract it so the directory looks like:
+Download the Oxford-IIIT Pet Dataset and extract so the directory looks like:
 
 ```
 oxford_pets/
@@ -144,8 +171,6 @@ python train.py \
     --ablation
 ```
 
-Runs three extra variants after the base run:
-
 | Run suffix | Change | W&B section |
 |------------|--------|-------------|
 | `_nobn` | No BatchNorm | 2.1 |
@@ -164,7 +189,7 @@ Runs three extra variants after the base run:
 | `--lr` | `5e-4` | Initial learning rate |
 | `--dropout_p` | `0.5` | Dropout probability |
 | `--weight_decay` | `1e-4` | AdamW weight decay |
-| `--label_smoothing` | `0.1` | CrossEntropy label smoothing (classification) |
+| `--label_smoothing` | `0.1` | CrossEntropy label smoothing |
 | `--mixup_alpha` | `0.4` | Mixup alpha — set 0 to disable |
 | `--freeze_encoder` | `False` | Freeze encoder weights (segmentation only) |
 | `--num_workers` | `4` | DataLoader workers |
@@ -176,7 +201,7 @@ Runs three extra variants after the base run:
 
 ## Inference
 
-Evaluates `MultiTaskPerceptionModel` on the held-out test split. Checkpoints are automatically downloaded from Google Drive on first run.
+Checkpoints are auto-downloaded from Google Drive on first run.
 
 ```bash
 python inference.py \
@@ -184,8 +209,6 @@ python inference.py \
     --ckpt_dir  checkpoints \
     --batch_size 32
 ```
-
-Sample output:
 
 ```
 Test samples: 733
@@ -198,11 +221,43 @@ Test samples: 733
 
 ---
 
+## W&B Report Scripts
+
+All scripts are in `wandb_test/`. Run from the project root.
+
+| Script | Section | Requires |
+|--------|---------|----------|
+| `report_2_1_batchnorm_effect.py` | BatchNorm effect | none |
+| `report_2_2_dropout_dynamics.py` | Dropout dynamics | none |
+| `report_2_3_transfer_learning.py` | Transfer learning showdown | `classifier.pth` |
+| `report_2_4_feature_maps.py` | Feature map visualisation | `classifier.pth` |
+| `report_2_5_detection_table.py` | Detection table & IoU | `localizer.pth` |
+| `report_2_6_segmentation_eval.py` | Dice vs pixel accuracy | `unet.pth` |
+| `report_2_7_pipeline_showcase.py` | Pipeline showcase | auto-downloaded |
+| `report_2_8_meta_analysis.py` | Meta-analysis | all checkpoints |
+
+Example:
+
+```bash
+# No checkpoint needed — trains from scratch
+python wandb_test/report_2_1_batchnorm_effect.py --data_root /path/to/oxford_pets
+
+# Needs classifier.pth
+python wandb_test/report_2_4_feature_maps.py --data_root /path/to/oxford_pets
+
+# Supply 3 in-the-wild images for section 2.7
+python wandb_test/report_2_7_pipeline_showcase.py \
+    --data_root   /path/to/oxford_pets \
+    --wild_images /path/dog1.jpg /path/cat1.jpg /path/dog2.jpg
+```
+
+---
+
 ## Architecture
 
 ### VGG11Encoder (`models/vgg11.py`)
 
-Standard VGG-11 topology with BatchNorm2d after every convolution. Kaiming He initialisation for all Conv2d layers.
+Standard VGG-11 with BatchNorm2d after every convolution, Kaiming He initialisation.
 
 ```
 Input (B, 3, 224, 224)
@@ -210,96 +265,70 @@ Input (B, 3, 224, 224)
   block2 → 128 filters  → pool → (B, 128,  56,  56)  skip b2
   block3 → 256 filters×2→ pool → (B, 256,  28,  28)  skip b3
   block4 → 512 filters×2→ pool → (B, 512,  14,  14)  skip b4
-  block5 → 512 filters×2→ pool → (B, 512,   7,   7)  bottleneck / skip b5
+  block5 → 512 filters×2→ pool → (B, 512,   7,   7)  bottleneck
 ```
-
-`forward(x, return_features=True)` returns both the bottleneck tensor and the skip map dict `{"b1"…"b5"}` used by the U-Net decoder.
 
 ### CustomDropout (`models/layers.py`)
 
-Inverted-scaling dropout implemented without using `nn.Dropout` or `F.dropout`:
+Inverted-scaling dropout — no `nn.Dropout` or `F.dropout` used.
 
-- **Train:** sample a Bernoulli mask at keep probability `(1−p)`, multiply activations by the mask, then scale by `1/(1−p)` so the expected output magnitude is unchanged.
-- **Eval:** identity — no masking, no scaling.
-
-```python
-from models.layers import CustomDropout
-d = CustomDropout(p=0.5)
-```
-
-**Design rationale:** BatchNorm1d is placed *before* dropout in the FC head. BN normalises the full feature distribution; dropout then acts as an ensemble regulariser on those normalised features, which is more stable than reversing the order.
+- **Train:** Bernoulli mask at keep prob `(1−p)`, scale survivors by `1/(1−p)`
+- **Eval:** identity pass-through
 
 ### PetClassifier (`models/classification.py`)
 
 ```
-VGG11Encoder (bottleneck 512×7×7)
-  → Flatten → Linear(25088→4096) → BN1d → ReLU → CustomDropout(0.5)
-            → Linear(4096→4096)  → BN1d → ReLU → CustomDropout(0.5)
-            → Linear(4096→37)    → logits
+VGG11Encoder → Flatten
+  → Linear(25088→4096) → BN1d → ReLU → CustomDropout(0.5)
+  → Linear(4096→4096)  → BN1d → ReLU → CustomDropout(0.5)
+  → Linear(4096→37)
 ```
 
 ### LocalizationModel (`models/localization.py`)
 
 ```
-VGG11Encoder (bottleneck 512×7×7)
-  → Flatten → Linear(25088→1024) → BN1d → ReLU → CustomDropout(0.5)
-            → Linear(1024→4) → Sigmoid × 224
+VGG11Encoder → Flatten
+  → Linear(25088→1024) → BN1d → ReLU → CustomDropout(0.5)
+  → Linear(1024→4) → Sigmoid × 224
 ```
 
-Output: `(cx, cy, w, h)` in pixel coordinates, bounded to `(0, 224)` by the sigmoid.
-
-**Justification for fine-tuning vs freezing:** The encoder is warm-started from the classification checkpoint and fine-tuned end-to-end. Freezing the backbone reduces localisation accuracy because the classification features are not optimised for spatial precision; allowing the gradients to flow through the encoder lets the features adapt to the regression objective.
+Output: `(cx, cy, w, h)` pixel coordinates bounded to `(0, 224)`.
 
 ### IoULoss (`losses/iou_loss.py`)
 
-Custom IoU loss inheriting from `nn.Module`. Converts `(cx, cy, w, h)` to corner format internally, computes per-sample IoU, returns `1 − IoU`. Supports `reduction='mean'|'sum'|'none'`.
-
-```python
-from losses.iou_loss import IoULoss
-criterion = IoULoss(reduction='mean')
-```
-
-**Justification:** IoU loss directly optimises the overlap metric used for evaluation. Combined with MSE loss (which provides stable gradients early in training when IoU gradients are near zero), the model converges reliably.
+Custom IoU loss. Input `(cx, cy, w, h)` pixel format → returns `1 − IoU`.
+Supports `reduction='mean'|'sum'|'none'`.
 
 ### UNetVGG11 (`models/segmentation.py`)
 
-U-Net style decoder that mirrors the VGG-11 encoder. All upsampling uses `ConvTranspose2d` — no bilinear interpolation.
+U-Net decoder mirroring VGG-11 encoder. All upsampling via `ConvTranspose2d` only.
 
 ```
-bottleneck (7×7)  → UpBlock(512,512,512) → 14×14   fused with skip b5
-                  → UpBlock(512,512,256) → 28×28   fused with skip b4
-                  → UpBlock(256,256,128) → 56×56   fused with skip b3
-                  → UpBlock(128,128, 64) → 112×112 fused with skip b2
-                  → UpBlock( 64, 64, 32) → 224×224 fused with skip b1
-                  → Conv1×1(32→3)        → mask logits
+bottleneck (7×7) → UpBlock×5 → 224×224 → Conv1×1 → 3-class logits
 ```
 
-**Loss:** weighted CrossEntropy (`ignore_index=−1`) + soft Dice with class weights `[1.0, 0.8, 3.0]`. The boundary class (≈10% of pixels) is up-weighted ×3 to prevent the model from ignoring it.
-
-**Justification for Dice loss:** Pixel accuracy is misleading for the Oxford Pet trimap because the background class dominates (~50% of pixels). A trivial "predict everything as background" classifier achieves ~50% pixel accuracy but near-zero Dice. Dice directly measures overlap and is robust to class imbalance.
+Loss: weighted CrossEntropy + soft Dice. Class weights `[1.0, 0.8, 3.0]`.
 
 ### MultiTaskPerceptionModel (`models/multitask.py`)
 
-Three independent VGG-11 encoders — one per task. Each encoder is loaded from the checkpoint produced by that task's dedicated training run.
-
-**Why not a single shared encoder?** Each head was optimised against the features from its own encoder. If a shared encoder from one task is substituted, the other two heads receive feature distributions they were never trained on, causing their metrics to collapse. Three separate encoders ensure every head always sees the feature statistics from its training.
+Three independent VGG-11 encoders (one per task). Checkpoints auto-downloaded from Google Drive on init.
 
 ```python
 from models.multitask import MultiTaskPerceptionModel
 
-model = MultiTaskPerceptionModel()   # auto-downloads checkpoints from Google Drive
-out   = model(images)                # single forward pass
+model = MultiTaskPerceptionModel()
+out   = model(images)
 
-out["classification"]  # (B, 37)          class logits
-out["localization"]    # (B, 4)            (cx, cy, w, h) pixel space
-out["segmentation"]    # (B, 3, 224, 224)  trimap logits
+out["classification"]  # (B, 37)
+out["localization"]    # (B, 4)            — (cx, cy, w, h) pixels
+out["segmentation"]    # (B, 3, 224, 224)
 ```
 
 ---
 
-## Dataset
+## Dataset Details
 
-`data/pets_dataset.py` reads `annotations/list.txt` and applies a stratified 80/10/10 train/val/test split (`random_state=42`).
+`data/dataset.py` reads `annotations/list.txt`. Stratified 80/10/10 split (`random_state=42`).
 
 | Detail | Value |
 |--------|-------|
@@ -307,12 +336,12 @@ out["segmentation"]    # (B, 3, 224, 224)  trimap logits
 | Classes | 37 breeds |
 | Input size | 224 × 224 |
 | Trimap classes | 0=foreground, 1=background, 2=boundary |
-| Bbox format (stored) | xyxy pixel |
-| Bbox format (in loss) | cxcywh pixel |
+| Bbox format stored | xyxy pixel |
+| Bbox format in loss | cxcywh pixel |
 
-**Training augmentation:** `RandomResizedCrop(0.5–1.0)` + `HorizontalFlip` + `ColorJitter` + `CLAHE` + `Sharpen` + `GaussNoise` + `MotionBlur` + `CoarseDropout`
+**Train augmentation:** `RandomResizedCrop` + `HorizontalFlip` + `ColorJitter` + `CLAHE` + `GaussNoise` + `CoarseDropout`
 
-**Val/test:** `Resize(224)` only — no random ops.
+**Val/test:** `Resize(224)` only.
 
 ---
 
@@ -320,32 +349,23 @@ out["segmentation"]    # (B, 3, 224, 224)  trimap logits
 
 | Component | Choice | Reason |
 |-----------|--------|--------|
-| Optimiser | AdamW | Weight decay decoupled from gradient scaling |
-| LR schedule | 5-epoch linear warm-up → cosine annealing to 1e-6 | Prevents cold-start instability with BatchNorm |
-| Gradient clipping | max norm = 1.0 | Prevents exploding gradients in FC layers |
-| EMA | decay = 0.999 | Validation and checkpointing use EMA weights for better generalisation |
-| Mixup | α = 0.4, starts at epoch 6 | Activates after warm-up so BatchNorm statistics stabilise first |
-| Label smoothing | 0.1 | Prevents overconfident predictions on visually similar breeds |
-
----
-
-Pipeline metrics on the autograder test set:
-
-| Metric | Value |
-|--------|-------|
-| Classification Macro-F1 | 0.3571 |
-| Localisation Acc@IoU≥0.5 | 70.0% |
-| Localisation Acc@IoU≥0.75 | 40.0% |
-| Segmentation Macro-Dice | 0.7283 |
+| Optimiser | AdamW | Decoupled weight decay |
+| LR schedule | 5-epoch warm-up → cosine annealing | Prevents cold-start instability |
+| Gradient clipping | max norm = 1.0 | Prevents exploding gradients |
+| EMA | decay = 0.999 | Better generalisation at checkpoint time |
+| Mixup | α = 0.4, starts epoch 6 | After warm-up so BN stats stabilise first |
+| Label smoothing | 0.1 | Prevents overconfident predictions |
 
 ---
 
 ## Checkpoints
 
-Model checkpoints are not stored in this repository (excluded via `.gitignore`). They are automatically downloaded from Google Drive when `MultiTaskPerceptionModel` is instantiated.
+Not stored in this repo (excluded via `.gitignore`). Auto-downloaded by `MultiTaskPerceptionModel.__init__`.
 
 | File | Task | Drive link |
 |------|------|------------|
 | `classifier.pth` | Classification | https://drive.google.com/file/d/10PkzOaIfSnLNwx-j5i4RYXU1vH9bfljd/view?usp=sharing |
 | `localizer.pth`  | Localisation  | https://drive.google.com/file/d/1baPZLEV-3ZK9Hcm1ovpSIsKOVX7C2Nkf/view?usp=sharing |
 | `unet.pth`       | Segmentation  | https://drive.google.com/file/d/1yPqyIgdMd9ntg3EZ1k34kY0y08ocyxcq/view?usp=sharing |
+
+> ⚠️ Do not delete the Drive folder until assignment marks are released.
