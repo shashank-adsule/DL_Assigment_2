@@ -1,203 +1,174 @@
 """
-report_2_7_pipeline_showcase.py
-=================================
-W&B Report Section 2.7 — The Final Pipeline Showcase
+report_2_7_pipeline_showcase.py  —  Section 2.7: Final Pipeline Showcase
 
-Runs the full MultiTaskPerceptionModel on:
-  (A) 3 novel "in-the-wild" images you download from the internet
-  (B) 5 test-set images as a reference baseline
+Runs MultiTaskPerceptionModel on:
+  (A) 3+ novel "in-the-wild" pet images you supply with --wild_images
+  (B) N images from the test set for reference
 
-For each image logs to W&B:
-  - Original image
-  - Predicted bounding box overlay
-  - Predicted segmentation mask overlay
-  - Predicted breed label (top-3)
+For each image logs a 3-panel figure:
+  [Bounding box overlay] | [Segmentation mask overlay] | [Top-3 breed chart]
 
-Usage:
-  1. Download 3 pet images from the internet, save them anywhere.
-  2. Run:
+Checkpoints are auto-downloaded from Google Drive by MultiTaskPerceptionModel.__init__.
 
-    python report_2_7_pipeline_showcase.py \
-        --data_root    /path/to/oxford_pets \
-        --model_ckpt   outputs/task4_multitask_best.pt \
-        --wild_images  /path/img1.jpg /path/img2.jpg /path/img3.jpg \
-        --wandb_project da6401_a2_report
+Run from project root:
+    python wandb_reports/report_2_7_pipeline_showcase.py \
+        --data_root   /path/to/pets \
+        --wild_images /path/dog1.jpg /path/cat1.jpg /path/dog2.jpg
 """
 
-import argparse, os, sys
+import os, sys, warnings
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+warnings.filterwarnings("ignore", category=UserWarning, module="albumentations")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import torch
-import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+import argparse
+import matplotlib; matplotlib.use("Agg")
 import matplotlib.patches as patches
-from PIL import Image
-import wandb
-
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 import torchvision.transforms as T
+import wandb
+from PIL import Image
+from torch.utils.data import DataLoader
+
 from models.multitask import MultiTaskPerceptionModel
-from data.dataset     import get_dataloaders
+from data.pets_dataset import OxfordPetDataset, collate_fn
 
-# Oxford Pet class names (1-indexed in dataset; 0-indexed here)
 CLASS_NAMES = [
-    'Abyssinian','Bengal','Birman','Bombay','British Shorthair',
-    'Egyptian Mau','Maine Coon','Persian','Ragdoll','Russian Blue',
-    'Siamese','Sphynx','American Bulldog','American Pit Bull Terrier',
-    'Basset Hound','Beagle','Boxer','Chihuahua','English Cocker Spaniel',
-    'English Setter','German Shorthaired','Great Pyrenees','Havanese',
-    'Japanese Chin','Keeshond','Leonberger','Miniature Pinscher',
-    'Newfoundland','Pomeranian','Pug','Saint Bernard','Samoyed',
-    'Scottish Terrier','Shiba Inu','Staffordshire Bull Terrier',
-    'Wheaten Terrier','Yorkshire Terrier',
+    "Abyssinian","Bengal","Birman","Bombay","British Shorthair",
+    "Egyptian Mau","Maine Coon","Persian","Ragdoll","Russian Blue",
+    "Siamese","Sphynx","American Bulldog","American Pit Bull Terrier",
+    "Basset Hound","Beagle","Boxer","Chihuahua","English Cocker Spaniel",
+    "English Setter","German Shorthaired","Great Pyrenees","Havanese",
+    "Japanese Chin","Keeshond","Leonberger","Miniature Pinscher",
+    "Newfoundland","Pomeranian","Pug","Saint Bernard","Samoyed",
+    "Scottish Terrier","Shiba Inu","Staffordshire Bull Terrier",
+    "Wheaten Terrier","Yorkshire Terrier",
 ]
-
 PALETTE = np.array([[255,128,0],[70,130,180],[255,255,0]], dtype=np.uint8)
-
-IMG_TRANSFORM = T.Compose([
-    T.Resize((224, 224)),
-    T.ToTensor(),
+MEAN    = torch.tensor([0.485,0.456,0.406]).view(3,1,1)
+STD     = torch.tensor([0.229,0.224,0.225]).view(3,1,1)
+TRANSFORM = T.Compose([
+    T.Resize((224,224)), T.ToTensor(),
     T.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
 ])
 
 
-# ---------------------------------------------------------------------------
 def denorm(t):
-    mean = torch.tensor([0.485,0.456,0.406]).view(3,1,1)
-    std  = torch.tensor([0.229,0.224,0.225]).view(3,1,1)
-    return (t * std + mean).clamp(0,1).permute(1,2,0).numpy()
+    return (t * STD + MEAN).clamp(0,1).permute(1,2,0).numpy()
 
 
-def run_pipeline(model, img_tensor, device):
-    model.eval()
-    with torch.no_grad():
-        out = model(img_tensor.unsqueeze(0).to(device))
-    cls_logits = out['classification'][0].cpu()
-    bbox       = out['localization'][0].cpu()
-    seg_logits = out['segmentation'][0].cpu()
-    return cls_logits, bbox, seg_logits
+@torch.no_grad()
+def predict(model, tensor, device):
+    out = model(tensor.unsqueeze(0).to(device))
+    return (out["classification"][0].cpu(),
+            out["localization"][0].cpu(),
+            out["segmentation"][0].cpu())
 
 
-def make_result_figure(orig_np, cls_logits, bbox, seg_logits, title=''):
-    """3-panel figure: bbox overlay | seg mask | top-3 breed bar chart."""
+def make_panel(orig_np, cls_logits, bbox_cxcywh, seg_logits, title=""):
     H, W = orig_np.shape[:2]
-
-    # bbox panel
-    pred_mask = seg_logits.argmax(0).numpy().clip(0, 2)
-    seg_rgb   = PALETTE[pred_mask]
-
-    top3_probs  = torch.softmax(cls_logits, 0).topk(3)
-    top3_labels = [CLASS_NAMES[i] for i in top3_probs.indices.tolist()]
-    top3_vals   = top3_probs.values.tolist()
+    seg_rgb  = PALETTE[seg_logits.argmax(0).numpy().clip(0,2)]
+    top3     = torch.softmax(cls_logits, 0).topk(3)
+    names    = [CLASS_NAMES[i] for i in top3.indices.tolist()]
+    probs    = top3.values.tolist()
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
 
-    # Panel 1: bbox
-    ax = axes[0]
-    ax.imshow(orig_np)
-    cx, cy, bw, bh = bbox.tolist()
-    x1 = (cx - bw/2) * W;  y1 = (cy - bh/2) * H
-    ax.add_patch(patches.Rectangle(
-        (x1, y1), bw*W, bh*H,
-        linewidth=3, edgecolor='red', facecolor='none'))
-    ax.set_title('Bounding box', fontsize=12); ax.axis('off')
+    # Panel 1 — bounding box (cxcywh pixel)
+    axes[0].imshow(orig_np)
+    cx, cy, bw, bh = bbox_cxcywh.tolist()
+    axes[0].add_patch(patches.Rectangle(
+        (cx-bw/2, cy-bh/2), bw, bh,
+        linewidth=3, edgecolor="red", facecolor="none"))
+    axes[0].set_title("Bounding box"); axes[0].axis("off")
 
-    # Panel 2: seg mask
-    ax = axes[1]
-    overlay = (orig_np * 0.5 + seg_rgb/255 * 0.5)
-    ax.imshow(overlay.clip(0, 1))
-    ax.set_title('Segmentation mask', fontsize=12); ax.axis('off')
+    # Panel 2 — segmentation overlay
+    overlay = (orig_np * 0.5 + seg_rgb/255.0 * 0.5).clip(0,1)
+    axes[1].imshow(overlay)
+    axes[1].set_title("Segmentation mask"); axes[1].axis("off")
 
-    # Panel 3: top-3 breeds
-    ax = axes[2]
-    colors = ['#4C72B0', '#DD8452', '#55A868']
-    bars = ax.barh(top3_labels[::-1], top3_vals[::-1], color=colors[::-1])
-    ax.set_xlim(0, 1); ax.set_xlabel('Confidence')
-    ax.set_title('Top-3 breed predictions', fontsize=12)
-    for bar, val in zip(bars, top3_vals[::-1]):
-        ax.text(val + 0.01, bar.get_y() + bar.get_height()/2,
-                f'{val:.2%}', va='center', fontsize=9)
-
+    # Panel 3 — top-3 breed chart
+    colors = ["#378ADD","#D85A30","#1D9E75"]
+    bars   = axes[2].barh(names[::-1], probs[::-1], color=colors[::-1])
+    axes[2].set_xlim(0,1); axes[2].set_xlabel("Confidence")
+    axes[2].set_title("Top-3 breed predictions")
+    for bar, p in zip(bars, probs[::-1]):
+        axes[2].text(p+0.01, bar.get_y()+bar.get_height()/2,
+                     f"{p:.1%}", va="center", fontsize=9)
     if title:
-        fig.suptitle(title, fontsize=13, y=1.02)
+        fig.suptitle(title, fontsize=11, y=1.01)
     plt.tight_layout()
     return fig
 
 
-# ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data_root',     required=True)
-    parser.add_argument('--model_ckpt',    required=True)
-    parser.add_argument('--wild_images',   nargs='+', default=[],
-                        help='Paths to novel in-the-wild pet images')
-    parser.add_argument('--n_test',        type=int, default=5,
-                        help='How many test-set images to also showcase')
-    parser.add_argument('--batch_size',    type=int, default=8)
-    parser.add_argument('--num_workers',   type=int, default=4)
-    parser.add_argument('--wandb_project', default='da6401_a2_report')
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data_root",     default=r"D:\code\repo\DL_Assigment_2\temp")
+    ap.add_argument("--wild_images",   nargs="*", default=[],
+                    help="Paths to in-the-wild pet images (3 recommended)")
+    ap.add_argument("--n_test",        type=int, default=5)
+    ap.add_argument("--batch_size",    type=int, default=8)
+    ap.add_argument("--num_workers",   type=int, default=4)
+    ap.add_argument("--wandb_project", default="da6401-assignment2")
+    args = ap.parse_args()
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    wandb.init(project=args.wandb_project, name='2.7_pipeline_showcase',
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    wandb.init(project=args.wandb_project, name="2.7_pipeline_showcase",
                config=vars(args))
 
-    # --- Load unified model ---
-    model = MultiTaskPerceptionModel(num_classes=37, num_seg_classes=3)
-    ckpt  = torch.load(args.model_ckpt, map_location='cpu')
-    model.load_state_dict(ckpt['model'])
+    # MultiTaskPerceptionModel auto-downloads checkpoints from Google Drive
+    model = MultiTaskPerceptionModel()
     model = model.to(device)
-    print('MultiTask model loaded.')
+    model.eval()
+    print("MultiTaskPerceptionModel ready.")
 
-    wb_wild, wb_test = [], []
-
-    # ---- A. In-the-wild images ----
+    # --- A. In-the-wild images ---
+    wild_logs = []
     for path in args.wild_images:
         if not os.path.exists(path):
-            print(f'  WARNING: {path} not found, skipping.')
-            continue
-        pil = Image.open(path).convert('RGB')
-        orig_np = np.array(pil.resize((224,224))).astype(np.float32) / 255.0
-        tensor  = IMG_TRANSFORM(pil)
-
-        cls_l, bbox, seg_l = run_pipeline(model, tensor, device)
-        fig = make_result_figure(orig_np, cls_l, bbox, seg_l,
-                                 title=f'Wild image: {os.path.basename(path)}')
-        wb_wild.append(wandb.Image(fig, caption=os.path.basename(path)))
+            print(f"  Skipping (not found): {path}"); continue
+        pil    = Image.open(path).convert("RGB")
+        orig   = np.array(pil.resize((224,224))).astype(np.float32)/255.0
+        tensor = TRANSFORM(pil)
+        cls_l, bbox, seg_l = predict(model, tensor, device)
+        fig = make_panel(orig, cls_l, bbox, seg_l,
+                         title=f"Wild — {os.path.basename(path)}")
+        wild_logs.append(wandb.Image(fig, caption=os.path.basename(path)))
         plt.close(fig)
-        print(f'  Processed wild image: {path}')
+        print(f"  Processed: {path}")
+    if wild_logs:
+        wandb.log({"wild_images": wild_logs})
 
-    if wb_wild:
-        wandb.log({'wild_images_showcase': wb_wild})
+    # --- B. Test-set reference images ---
+    te_dl = DataLoader(
+        OxfordPetDataset(args.data_root, partition="test", mode="all"),
+        batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, collate_fn=collate_fn)
 
-    # ---- B. Test-set images ----
-    _, _, test_loader = get_dataloaders(
-        root=args.data_root, task='multitask',
-        batch_size=args.batch_size, num_workers=args.num_workers)
-
+    test_logs = []
     collected = 0
-    for batch in test_loader:
-        imgs, labels, bboxes, masks = batch
+    for batch in te_dl:
+        imgs   = batch["image"]
+        labels = batch["label"]
         for i in range(len(imgs)):
             if collected >= args.n_test: break
-            orig_np = denorm(imgs[i])
-            cls_l, bbox_pred, seg_l = run_pipeline(model, imgs[i], device)
-            fig = make_result_figure(
-                orig_np, cls_l, bbox_pred, seg_l,
-                title=f'Test image {collected+1} — GT: {CLASS_NAMES[labels[i]]}')
-            wb_test.append(wandb.Image(fig, caption=f'Test {collected+1}'))
+            orig = denorm(imgs[i])
+            cls_l, bbox, seg_l = predict(model, imgs[i], device)
+            fig = make_panel(orig, cls_l, bbox, seg_l,
+                             title=f"Test {collected+1} — GT: {CLASS_NAMES[labels[i]]}")
+            test_logs.append(wandb.Image(fig, caption=f"Test {collected+1}"))
             plt.close(fig)
             collected += 1
         if collected >= args.n_test: break
+    if test_logs:
+        wandb.log({"test_set_showcase": test_logs})
 
-    if wb_test:
-        wandb.log({'test_set_showcase': wb_test})
-
-    print(f'\nShowcased {len(wb_wild)} wild + {collected} test images.')
-    print('Section 2.7 complete.')
+    print(f"Logged {len(wild_logs)} wild + {collected} test images.")
+    print("Section 2.7 done.")
     wandb.finish()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

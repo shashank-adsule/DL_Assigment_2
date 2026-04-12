@@ -1,119 +1,109 @@
 """
-report_2_2_dropout_dynamics.py
-===============================
-W&B Report Section 2.2 — Internal Dynamics of Custom Dropout
+report_2_2_dropout_dynamics.py  —  Section 2.2: Internal Dynamics (Dropout)
 
-What this script does:
-  Trains VGG11 under 3 dropout conditions and overlays the curves in W&B:
-    (A) No Dropout      (p = 0.0)
-    (B) Dropout p = 0.2
-    (C) Dropout p = 0.5
+Trains PetClassifier under 3 dropout conditions, each as its own W&B run:
+  (A) No Dropout      p = 0.0
+  (B) Custom Dropout  p = 0.2
+  (C) Custom Dropout  p = 0.5
 
-  Logs per epoch:
-    - train_loss / val_loss  (all 3 runs on same W&B chart via consistent keys)
-    - generalisation_gap = val_loss - train_loss
+Each run logs train_loss, val_loss, and generalisation_gap per epoch.
+In W&B, select all 3 runs and overlay the curves to compare.
 
-Run:
-    python report_2_2_dropout_dynamics.py \
-        --data_root /path/to/oxford_pets \
-        --epochs 20 \
-        --batch_size 32 \
-        --wandb_project da6401_a2_report
+No checkpoint needed — trains from scratch.
+
+Run from project root:
+    python wandb_reports/report_2_2_dropout_dynamics.py --data_root /path/to/pets
 """
 
-import argparse, os, sys
+import os, sys, warnings
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+warnings.filterwarnings("ignore", category=UserWarning, module="albumentations")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import argparse
 import torch
 import torch.nn as nn
 import wandb
-from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.utils.data import DataLoader
 
-from models.vgg11  import VGG11Encoder
-from data.dataset  import get_dataloaders
+from models.classification import PetClassifier
+from data.pets_dataset import OxfordPetDataset, collate_fn
 
 
-# ---------------------------------------------------------------------------
-def run_epoch(model, loader, optimizer, criterion, device, train: bool):
+def make_loaders(root, batch_size, num_workers):
+    kw = dict(batch_size=batch_size, num_workers=num_workers,
+              pin_memory=True, collate_fn=collate_fn)
+    return (DataLoader(OxfordPetDataset(root, partition="train", mode="cls"),
+                       shuffle=True, **kw),
+            DataLoader(OxfordPetDataset(root, partition="val",   mode="cls"),
+                       shuffle=False, **kw))
+
+
+def one_epoch(model, loader, opt, crit, device, train):
     model.train(train)
-    total_loss, n = 0.0, 0
+    total, n = 0.0, 0
     with torch.set_grad_enabled(train):
-        for imgs, labels in loader:
-            imgs, labels = imgs.to(device), labels.to(device)
-            loss = criterion(model(imgs), labels)
+        for batch in loader:
+            imgs   = batch["image"].to(device)
+            labels = batch["label"].to(device)
+            loss   = crit(model(imgs), labels)
             if train:
-                optimizer.zero_grad(); loss.backward(); optimizer.step()
-            total_loss += loss.item(); n += 1
-    return total_loss / max(n, 1)
+                opt.zero_grad(); loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step()
+            total += loss.item(); n += 1
+    return total / max(n, 1)
 
 
-# ---------------------------------------------------------------------------
-def train_one_config(args, dropout_p: float, run_name: str, device):
-    """Train a single dropout config; log to its own W&B run."""
+def run_one_config(args, dropout_p: float, run_name: str, device):
     wandb.init(project=args.wandb_project, name=run_name,
-               config={**vars(args), 'dropout_p': dropout_p},
-               reinit=True)
+               config={**vars(args), "dropout_p": dropout_p}, reinit=True)
 
-    train_loader, val_loader, _ = get_dataloaders(
-        root=args.data_root, task='classification',
-        batch_size=args.batch_size, num_workers=args.num_workers)
-
-    model = VGG11Encoder(num_classes=37, dropout_p=dropout_p).to(device)
-    # If p=0, effectively disable dropout (CustomDropout with p=0 passes through)
-
-    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer, patience=3, factor=0.5)
-    criterion = nn.CrossEntropyLoss()
+    tr_dl, va_dl = make_loaders(args.data_root, args.batch_size, args.num_workers)
+    model = PetClassifier(num_classes=37, drop_rate=dropout_p).to(device)
+    opt   = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    sched = CosineAnnealingLR(opt, T_max=args.epochs)
+    crit  = nn.CrossEntropyLoss(label_smoothing=0.1)
 
     for epoch in range(1, args.epochs + 1):
-        tr  = run_epoch(model, train_loader, optimizer, criterion, device, True)
-        val = run_epoch(model, val_loader,   optimizer, criterion, device, False)
-        scheduler.step(val)
-
+        tr  = one_epoch(model, tr_dl, opt, crit, device, True)
+        val = one_epoch(model, va_dl, opt, crit, device, False)
+        sched.step()
         gap = val - tr
-        wandb.log({
-            'train_loss':        tr,
-            'val_loss':          val,
-            'generalisation_gap': gap,
-            'lr':                optimizer.param_groups[0]['lr'],
-            'epoch':             epoch,
-        }, step=epoch)
-
-        print(f'  [{run_name}] Epoch {epoch:02d}  train={tr:.4f}  '
-              f'val={val:.4f}  gap={gap:.4f}')
-
+        wandb.log({"train_loss": tr, "val_loss": val,
+                   "generalisation_gap": gap,
+                   "lr": opt.param_groups[0]["lr"],
+                   "epoch": epoch}, step=epoch)
+        print(f"  [{run_name} {epoch:02d}]  "
+              f"tr={tr:.4f}  va={val:.4f}  gap={gap:+.4f}")
     wandb.finish()
 
 
-# ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data_root',     required=True)
-    parser.add_argument('--epochs',        type=int,   default=20)
-    parser.add_argument('--batch_size',    type=int,   default=32)
-    parser.add_argument('--lr',            type=float, default=1e-3)
-    parser.add_argument('--num_workers',   type=int,   default=4)
-    parser.add_argument('--wandb_project', default='da6401_a2_report')
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data_root",     default=r"D:\code\repo\DL_Assigment_2\temp")
+    ap.add_argument("--epochs",        type=int,   default=20)
+    ap.add_argument("--batch_size",    type=int,   default=32)
+    ap.add_argument("--lr",            type=float, default=5e-4)
+    ap.add_argument("--num_workers",   type=int,   default=4)
+    ap.add_argument("--wandb_project", default="da6401-assignment2")
+    args = ap.parse_args()
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'Device: {device}')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
 
-    configs = [
-        (0.0, '2.2_dropout_p0.0_no_dropout'),
-        (0.2, '2.2_dropout_p0.2'),
-        (0.5, '2.2_dropout_p0.5'),
-    ]
+    for p, name in [(0.0, "2.2_no_dropout"),
+                    (0.2, "2.2_dropout_p0.2"),
+                    (0.5, "2.2_dropout_p0.5")]:
+        print(f"\n{'='*55}\nRun: {name}\n{'='*55}")
+        run_one_config(args, dropout_p=p, run_name=name, device=device)
 
-    for p, name in configs:
-        print(f'\n--- Training: {name} ---')
-        train_one_config(args, dropout_p=p, run_name=name, device=device)
-
-    print('\nSection 2.2 complete.')
-    print('In W&B: go to your project → select all 3 runs → group by run name')
-    print('→ plot train_loss and val_loss overlaid to see the generalisation gap.')
+    print("\nSection 2.2 done.")
+    print("Tip: in W&B select all 3 runs → overlay train_loss, val_loss, "
+          "and generalisation_gap.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

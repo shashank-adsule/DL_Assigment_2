@@ -1,30 +1,3 @@
-"""
-train.py — DA6401 Assignment-2 Training Entry Point
-
-Mirrors the structure of the reference implementation but uses your
-own model classes (PetClassifier, LocalizationModel, UNetVGG11) and
-your OxfordPetDataset loader.
-
-Usage
------
-  # Task 1 — classification (run first)
-  python train.py --task classification --data_dir /path/to/oxford_pets
-
-  # Task 2 — localisation (needs classifier.pth)
-  python train.py --task localization --data_dir /path/to/oxford_pets
-
-  # Task 3 — segmentation (needs classifier.pth)
-  python train.py --task segmentation --data_dir /path/to/oxford_pets
-
-  # Ablation variants (for W&B report sections 2.1 and 2.2)
-  python train.py --task classification --data_dir /path/to/oxford_pets --ablation
-
-Checkpoints are saved to --ckpt_dir (default: checkpoints/)
-  classifier.pth   — best val macro-F1
-  localizer.pth    — best val mean-IoU
-  unet.pth         — best val macro-Dice
-"""
-
 import os
 import warnings
 os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
@@ -45,6 +18,7 @@ from sklearn.metrics import (
     precision_recall_fscore_support, confusion_matrix,
 )
 import matplotlib
+matplotlib.use("Agg")  # must be set before pyplot import on Windows
 import matplotlib.pyplot as plt
 
 from data.dataset import OxfordPetDataset, collate_fn
@@ -195,7 +169,6 @@ def clf_metrics(y_true: list, y_pred: list) -> dict:
 # ---------------------------------------------------------------------------
 
 def log_confusion_matrix(cm_norm: np.ndarray, epoch: int) -> None:
-    matplotlib.use("Agg")
     fig, ax = plt.subplots(figsize=(14, 12))
     im = ax.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
     short = [n[:10] for n in BREED_NAMES]
@@ -210,11 +183,11 @@ def log_confusion_matrix(cm_norm: np.ndarray, epoch: int) -> None:
 
 
 def log_per_class_f1(per_f1: np.ndarray, epoch: int) -> None:
+    # wandb.plot.bar writes to a Windows temp path that may not exist.
+    # Log as a plain Table instead — works on all platforms.
     data  = [[BREED_NAMES[i], float(per_f1[i])] for i in range(NUM_BREEDS)]
     table = wandb.Table(data=data, columns=["breed", "f1"])
-    wandb.log({"val/per_class_f1": wandb.plot.bar(
-                   table, "breed", "f1", title=f"Class F1 (epoch {epoch})"),
-               "epoch": epoch})
+    wandb.log({"val/per_class_f1_table": table, "epoch": epoch})
 
 
 def log_class_distribution(y_true: np.ndarray) -> None:
@@ -716,11 +689,11 @@ def parse_args():
     p = argparse.ArgumentParser(description="DA6401 Assignment-2 Training")
     p.add_argument("--task",
                    choices=["classification", "localization", "segmentation"],
-                   default="segmentation")
+                   default="classification")
     p.add_argument("--data_dir",          default=r"D:\code\repo\DL_Assigment_2\temp",
                    help="Root of the Oxford-IIIT Pet dataset")
     p.add_argument("--ckpt_dir",          default="checkpoints")
-    p.add_argument("--epochs",            type=int,   default=[20,30,60][0])
+    p.add_argument("--epochs",            type=int,   default=60)
     p.add_argument("--batch_size",        type=int,   default=32)
     p.add_argument("--lr",                type=float, default=5e-4)
     p.add_argument("--dropout_p",         type=float, default=0.5)
