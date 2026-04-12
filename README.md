@@ -8,7 +8,7 @@
 
 | Resource | URL |
 |----------|-----|
-| W&B Report | _paste your public W&B report link here_ |
+| W&B Report | https://wandb.ai/da25m005-indian-institute-of-technology-madras/da6401-assignment2/reports/DL-assigment-2-W-B-report--VmlldzoxNjQ5OTMyMA |
 | GitHub Repo | https://github.com/shashank-adsule/DL_Assigment_2 |
 
 ---

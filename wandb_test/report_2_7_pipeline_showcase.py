@@ -33,7 +33,7 @@ from PIL import Image
 from torch.utils.data import DataLoader
 
 from models.multitask import MultiTaskPerceptionModel
-from data.pets_dataset import OxfordPetDataset, collate_fn
+from data.dataset import OxfordPetDataset, collate_fn
 
 CLASS_NAMES = [
     "Abyssinian","Bengal","Birman","Bombay","British Shorthair",

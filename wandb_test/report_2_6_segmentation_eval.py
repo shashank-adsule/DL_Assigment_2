@@ -31,7 +31,7 @@ import wandb
 from torch.utils.data import DataLoader
 
 from models.segmentation import UNetVGG11
-from data.pets_dataset import OxfordPetDataset, collate_fn
+from data.dataset import OxfordPetDataset, collate_fn
 
 PALETTE = np.array([[255,128,0],[70,130,180],[255,255,0]], dtype=np.uint8)
 MEAN    = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)

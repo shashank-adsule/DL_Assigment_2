@@ -29,7 +29,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
 from models.classification import PetClassifier
-from data.pets_dataset import OxfordPetDataset, collate_fn
+from data.dataset import OxfordPetDataset, collate_fn
 
 
 def make_loaders(root, batch_size, num_workers):

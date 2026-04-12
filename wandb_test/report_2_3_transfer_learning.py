@@ -34,7 +34,7 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import f1_score
 
 from models.segmentation import UNetVGG11, DiceCELoss
-from data.pets_dataset import OxfordPetDataset, collate_fn
+from data.dataset import OxfordPetDataset, collate_fn
 
 
 def make_loaders(root, batch_size, num_workers):

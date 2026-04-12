@@ -41,7 +41,7 @@ from models.classification import PetClassifier
 from models.localization   import LocalizationModel
 from models.segmentation   import UNetVGG11
 from models.multitask      import MultiTaskPerceptionModel
-from data.pets_dataset     import OxfordPetDataset, collate_fn
+from data.dataset     import OxfordPetDataset, collate_fn
 
 CLASS_NAMES = [
     "Abyssinian","Bengal","Birman","Bombay","British Shorthair",

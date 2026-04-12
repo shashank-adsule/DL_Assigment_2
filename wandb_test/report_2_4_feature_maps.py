@@ -31,7 +31,7 @@ from torchvision.utils import make_grid
 from torch.utils.data import DataLoader
 
 from models.classification import PetClassifier
-from data.pets_dataset import OxfordPetDataset, collate_fn
+from data.dataset import OxfordPetDataset, collate_fn
 
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
 STD  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
